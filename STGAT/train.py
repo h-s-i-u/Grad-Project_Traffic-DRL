@@ -1,3 +1,4 @@
+import os
 import time
 import util
 import torch
@@ -231,7 +232,11 @@ def main():
                 mmin_epoch = i
                 trycnt = 0
                 
-                torch.save(net.state_dict(), 'experiment_METR_LA/best_model.pth')
+                # Honour --params_dir instead of the hard-coded experiment_METR_LA:
+                # training a second dataset used to silently overwrite the METR-LA model.
+                os.makedirs(args.params_dir, exist_ok=True)
+                torch.save(net.state_dict(),
+                           os.path.join(args.params_dir, 'best_model.pth'))
 
             # Testing
             outputs = []

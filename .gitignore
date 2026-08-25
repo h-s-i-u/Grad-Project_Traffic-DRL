@@ -77,6 +77,8 @@ datasets/
 *.npy
 *.npz
 *.pkl
+*.jsonl
+*.json
 
 # =========================
 # OSMnx Cache
@@ -110,3 +112,24 @@ wandb/
 # =========================
 *.bak
 results.json
+
+# =========================
+# paper_work
+# =========================
+paper_work/*
+!paper_work/實驗記錄_DRL決策模組.md
+!paper_work/實驗設計.md
+
+# =========================
+# Large geodata (not used by the pipeline)
+# =========================
+Map/Map_fined/鄉(鎮、市、區)界線*/
+*.shp
+*.shx
+*.dbf
+*.prj
+*.sbn
+*.sbx
+*.cpg
+*.CPG
+*.xlsx
