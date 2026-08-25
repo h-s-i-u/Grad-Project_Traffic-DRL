@@ -11,9 +11,9 @@
 
 | 項目 | 負責 |
 |---|---|
-| **STGCN / STGAT 預測模組、整合層、DRL 決策模組**（`integration/`、`STGCN/`、`STGAT/`） | **本人（本記錄範圍）** |
-| 台中路網資料、TDX 路況資料（`Map/`、`TDX_Data/`） | 組員 A |
-| SUMO 模擬環境與 TraCI 整合 | 組員 B（尚無產出） |
+| **STGCN / STGAT 預測模組、整合層、DRL 決策模組**（`integration/`、`STGCN/`、`STGAT/`、`fusion/`） | **黃子修（本記錄範圍）** |
+| 台中路網資料、TDX 路況資料（`Map/`、`TDX_Data/`） | 黃少鯤 |
+| SUMO 模擬環境與 TraCI 整合 | 江彥萱 |
 
 ---
 
@@ -48,13 +48,14 @@
 | 06-21 16:31 | 整合層 README 定稿 | `integration/README.md` |
 | **06-21 19:57** | **E-GAT agent 訓練完成** | `drl_agent.pt` |
 | 07-28 | Benchmark 重跑（random/hotspot 雙情境） | `results.json` (07-28 23:20) |
-| 07-31 | 收到台中 OSM 路網（組員 A） | `Map/*.csv` (07-31 15:03) |
+
+| 07-31 | 收到台中 OSM 路網（黃少鯤） | `Map/*.csv` (07-31 15:03) |
 | **08-03** | 台中接入：`.env`、loader、per-edge 容量、校準、`--graph` 分支 | `taichung_loader.py` 等 (08-03 21:44–22:05) |
-| 08-05 | 組員 A 交付 TDX 資料與新版路網（7,489 節點）；資料 pipeline 重構 | `Map/*.csv`、`build_network.py` |
+| 08-05 | 黃少鯤交付 TDX 資料與新版路網（7,489 節點）；資料 pipeline 重構 | `Map/*.csv`、`build_network.py` |
 | 08-06 | 首次台中 STGCN 訓練（3 epochs）＋ masked 評估工具；STGAT 資料集轉檔 | `evaluate_masked.py`、`convert_to_stgat_dataset.py` |
 | **08-07** | **兩模型完整訓練完成**（STGCN ×3 時程、STGAT 早停於 epoch 63） | `STGCN_taichung_p{3,6,12}.pt`、`experiment_taichung/best_model.pth` |
 | 08-09 | 集成權重搜尋；預測對齊守門（`--target-row` + `.meta.json`）；實驗場域 `build_arena.py`；`served%` 欄位 | `search_ensemble_weight.py`、`build_arena.py` |
-| **08-12** | 組員 A 交付新版路網（`Map_fined/` v1）與 CWA 降雨；**降雨效應評估 → 決定不整合**；v1 缺北屯，TDX 匹配僅 78/244 | `CWA/analyze_rain_speed.py` |
+| **08-12** | 黃少鯤交付新版路網（`Map_fined/` v1）與 CWA 降雨；**降雨效應評估 → 決定不整合**；v1 缺北屯，TDX 匹配僅 78/244 | `CWA/analyze_rain_speed.py` |
 | **08-13** | 路網 v2（補 `oneway`）→ v3（涵蓋全部 TDX）；新增簡化工具；**資料鏈重建至 202 節點**；場域重建（1,442 節點 / 15.2%） | `build_simplified_network.py`、`Map/arena_*.csv` |
 | **08-14** | **202 節點版六次重訓完成**；集成權重搜尋重現；場域重建（1,442 節點 / 15.2%）；獎勵尺度與 potential shaping 修正 | `STGCN_taichung_p{3,6,12}.pt`、`Map/arena_*.csv` |
 | **08-15** | **台中 DRL 訓練成功**（served 4% → 91%）；七策略比較；場域再簡化（840 節點、29.2 跳）；**覆蓋率翻倍的對照實驗證實預測層對路由無影響** | `checkpoints/taichung/drl_agent.pt`、`Map/arena_*.csv` |
@@ -467,7 +468,9 @@ agent 在 ATT、worst-ρ 追平甚至勝出，**唯獨 Gini 落後**（0.574 vs 
 
 ## 12. 階段十：台中真實路網接入（07-31 ~ 08-03）
 
-### 12.1 收到的資料（組員 A）
+
+### 12.1 收到的資料（黃少鯤）
+
 | 檔案 | 內容 |
 |---|---|
 | `Map/graph_edges_taichung.csv` | 15064 邊：`from_node, to_node, length_m, free_flow_speed_kmh, lanes, capacity` |
@@ -497,7 +500,8 @@ sample shortest-path hops: min 2 / mean 33.6 / max 66
 ```
 
 **四項發現**：
-1. **94% 的邊（14136/15031）缺速限** → 以 30 km/h 回填。建議請組員 A 用 OSM `highway` 等級補齊。
+
+1. **94% 的邊（14136/15031）缺速限** → 以 30 km/h 回填。建議請黃少鯤用 OSM `highway` 等級補齊。
 2. **圖已 99% 強連通**（5520/5559，有向）→ 不需 `bidirectional=True`。
 3. **容量單位不相容**：真實 veh/h（1360–8158）vs METR-LA 的 `cap=18`。
 4. **路徑長很多**（平均 33.6 跳、最長 66）→ `max_hops=60` 不足。
@@ -559,7 +563,8 @@ metr-la  -> 207 nodes; 15778 edges; default_max_hops=60
 
 ### 13.1 資料 pipeline 重構（靜態幾何／動態時序分離）
 
-組員交付的原始流程把「幾何計算」與「時序處理」混在同一支程式（`build_taichung_stgcn_dataset.py`），導致**每次微調鄰接參數都要重讀 11.9 GB 的原始 JSONL**。依相依性質重構為：
+
+黃少鯤交付的原始流程把「幾何計算」與「時序處理」混在同一支程式（`build_taichung_stgcn_dataset.py`），導致**每次微調鄰接參數都要重讀 11.9 GB 的原始 JSONL**。依相依性質重構為：
 
 | 程式 | 職責 | 輸入 | 重跑成本 |
 |---|---|---|---|
@@ -829,7 +834,8 @@ Dijkstra，當 97.4% 的邊 `tpred == t0` 時，預測最短路 ≈ 自由流最
 
 **動機**：計畫書 §4.2 將 CWA 氣候資料列為三大資料來源之一，§4.3 規劃注入 STGAT 的
 self-adaptive path，且 §5 的 MAE 目標（3.4–3.6）明白寫著「**理由是引入氣候特徵可降低
-極端天氣下的預測誤差**」。組員 A 於 08-12 交付 CODiS 降雨資料。
+
+極端天氣下的預測誤差**」。黃少鯤於 08-12 交付 CODiS 降雨資料。
 
 **先評估再投入**：加一個特徵通道意味著 STGCN／STGAT × 三時程共 **6 次重訓**，加上集成
 權重重新搜尋與整條推論鏈重跑。降雨只佔全期約 6% 的時數，因此**先量效應再決定**。
@@ -930,7 +936,8 @@ lag 1h / 2h 的型態一致（0–1 mm 為 −2.85% / −1.89%，> 10 mm 為 +1.
 
 ### 13.10 ★ 路網三次迭代與資料鏈重建（08-12 ~ 08-13）
 
-組員 A 交付了新版 OSM 匯出（`Map/Map_fined/`），欄位品質大幅提升，但**框選範圍**經過三次
+
+黃少鯤交付了新版 OSM 匯出（`Map/Map_fined/`），欄位品質大幅提升，但**框選範圍**經過三次
 迭代才正確。這一節記錄的核心教訓是：**地圖的框選範圍會永久決定預測模組的節點數。**
 
 #### 三個版本
@@ -950,7 +957,8 @@ lag 1h / 2h 的型態一致（0–1 mm 為 −2.85% / −1.89%，> 10 mm 為 +1.
 **驗證過的排除項**：簡化（§下方）只讓可用路段從 78 掉到 75，**損失 3 個**，
 屬長邊弦線的幾何誤差，可接受。**137 個的損失全部來自框選範圍**，與簡化無關。
 
-**給組員 A 的規格**（由 TDX metadata 直接算出）：
+
+**給黃少鯤的規格**（由 TDX metadata 直接算出）：
 
 ```
 TDX 244 路段 bbox : lat 24.1354 ~ 24.2100  lon 120.6223 ~ 120.7303
@@ -2740,12 +2748,12 @@ DRL 在台中訓練            ← 不被卡（台中 loader 不讀 *_pred.npy�
 | 9 | **E-GAT 規模** | ✅ 已驗證可跑（1,224 節點 / 2,342 邊，無崩潰）。🔴 **但平均路徑 41.3 跳（METR-LA 僅 1.5 跳）是目前最大未知數**——PPO 的 credit assignment 鏈長近 30 倍 |
 | 10 | **實驗場域（arena）** | ✅ **已於新路網重建並再簡化**：840 節點 / 1,690 邊、場域內 416 條種子邊、覆蓋率 24.6%（按邊）/ 14.1%（按長度）、平均 28.7 跳。`capacity_scale = 0.0429`（§13.13）|
 | 11 | ~~集成權重待檢討~~ | 併入 #5 |
-| 12 | **速限缺失** | ✅ **已由組員 A 解決**：`Map_fined` 依《道路交通安全規則》§93 補 50/30 兩級，並附 `speed_imputed` 旗標（補值率 88.2%，但有依據且可追蹤） |
+| 12 | **速限缺失** | ✅ **已由黃少鯤 解決**：`Map_fined` 依《道路交通安全規則》§93 補 50/30 兩級，並附 `speed_imputed` 旗標（補值率 88.2%，但有依據且可追蹤） |
 | 13 | **時間戳為 UTC** | 台灣 +8；尖峰時段分析前必須轉換 |
 | 14 | **容量縮放為經驗值**（0.04 對應 800 車） | 車輛數改變需重跑 `calibrate_taichung.py` |
 | 15 | **k-NN 對 DRL 的效果未驗證** | 僅驗證解析策略（§10.3） |
 | 16 | **舊 TDX 金鑰仍在 git 歷史** | 金鑰已改讀 `.env`，但建議至 TDX 後台 rotate |
-| 17 | **BPR 為 SUMO 的靜態替身** | 介面已預留，待組員 B 的 SUMO/TraCI（M3） |
+| 17 | **BPR 為 SUMO 的靜態替身** | 介面已預留，待江彥萱的 SUMO/TraCI（M3） |
 | 18 | **Gated Fusion** | ✅ **完成**（§13.22）。test：15 min 打平、60 min **−1.9% vs STGAT**。閘門 mean 0.8304、spread 0.035（路段）/0.052（時間）——**在動但幅度小**。⚠️ **改善主因是 STGCN 補 time-of-day，不是閘控**；val 的 2.52% 有一部分是「選 epoch」選出來的，test 只剩 1.9% |
 | 18b | ⚠️ **Fusion 刻意不接進決策層** | §13.13 證實 14.1%（按長度）覆蓋率下預測對路由無可測量影響（86% 路徑相同），接進去改變不了任何數字，只會多一個會漂移的設定。**Fusion 定位為軌道 A 的成果** |
 | 18c | ⚠️ **STGCN 原始輸出可為負** | val −6.3、test −5.8 km/h。路由路徑有 clamp（`length/speed` 遇負會爆或變負），**masked 評估不 clamp**，故報告的 MAE 含這些不可能的值。兩邊都合理，但差異來源須知悉（§13.19） |
@@ -3047,7 +3055,7 @@ python analyze_rain_speed.py
 
 | # | 工作 | 負責 |
 |---|---|---|
-| P | SUMO / TraCI 取代 BPR（策略與指標碼不需改動） | 組員 B |
+| P | SUMO / TraCI 取代 BPR（策略與指標碼不需改動） | 江彥萱 |
 | Q | Demo 情境定案（TDX 網格內 vs 臺灣大道封閉 vs 兩者皆做） | 全體 |
 
 ---
