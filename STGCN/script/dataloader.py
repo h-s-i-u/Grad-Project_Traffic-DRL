@@ -16,6 +16,14 @@ def load_adj(dataset_name):
         n_vertex = 325
     elif dataset_name == 'pemsd7-m':
         n_vertex = 228
+    elif dataset_name == 'taichung':
+        # Surviving TDX sections after build_speed.py's >50%-missing filter. It moved
+        # 175 -> 202 when the OSM extract was widened to cover 北屯 (all 244 sections
+        # now map, up from 212). Re-check this whenever the pipeline is re-run: the
+        # adjacency below is loaded from disk and would silently disagree with a stale
+        # value here. run_infer_taichung.py trusts adj.shape[0] over this number and
+        # warns on a mismatch.
+        n_vertex = 202
 
     return adj, n_vertex
 

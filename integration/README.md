@@ -1,156 +1,185 @@
 # `integration/` — prediction → decision dataflow
 
-This folder wires the traffic-prediction models (STGCN + STGAT) to the routing
-decision layer. It builds a congestion-weighted road graph from the predictions and
-compares routing policies, measuring whether congestion-aware + global-penalty
-routing suppresses the **herding effect (羊群效應)** — the core claim of the project.
+This folder wires the traffic-prediction models (STGCN + STGAT) to the routing decision
+layer. It builds a congestion-weighted road graph from the predictions and compares
+routing policies, measuring whether congestion-aware + global-penalty routing suppresses
+the **herding effect (羊群效應)** — the core claim of the project.
 
-Everything needed for the decision stage lives in this one folder; it has no sideways
-dependency on any other directory. The road-network adjacency is vendored under
-`data/`, and the model predictions are written here by the model repos' `run_infer.py`.
+Two road networks run through the same code path:
+
+| `--graph` | network | edge times | speed source |
+|---|---|---|---|
+| `metr-la` (default) | 207-sensor Gaussian kernel | relative units | `stg{cn,at}_pred.npy` |
+| `taichung` | real OSM network, 7,489 nodes / 20,390 edges | **seconds** | `taichung_pred_edges.csv` |
+
+The decision stage is pure NumPy + NetworkX + SciPy (no GPU, ~1 s); only the DRL agent
+needs PyTorch + `torch_geometric`.
+
+---
 
 ## How to run
 
-```
+```bash
 cd integration
-python pipeline.py                 # full: (re)generate predictions on GPU, then compare
-python pipeline.py --skip-infer    # reuse cached *_pred.npy (fast, no GPU)
-python run_compare.py --scenario random --vehicles 200   # run the comparison directly
+
+# METR-LA
+python run_compare.py                                   # seven-policy ablation
+python run_compare.py --drl checkpoints/metr-la/drl_agent.pt        # add the trained agent
+python run_compare.py --repeat 10 --drl checkpoints/metr-la/drl_agent.pt   # mean ± std
+python train_drl.py --iters 200 --train-vehicles 300 --entropy-coef 0.03
+
+# Taichung (real road network)
+python taichung_loader.py                               # load check + graph stats
+python calibrate_taichung.py                            # capacity sweep + comparison
+python make_drl_input.py                                # ensemble predictions -> edge speeds
+python run_compare.py --graph taichung --vehicles 800
+python train_drl.py --graph taichung --iters 20 --train-vehicles 800
 ```
 
-The decision stage is pure NumPy + NetworkX + SciPy (no GPU, ~1 s). Only the optional
-inference stage needs PyTorch/GPU.
+---
 
 ## Files
 
 | file | role |
 |---|---|
-| `config.py` | paths + all hyper-parameters (single source of truth) |
-| `network.py` | load predictions + adjacency, build the directed road graph |
-| `policies.py` | routing policies (static / prediction-greedy / load-aware / global-penalty) + DRL scaffold (RoutingEnv / EGATActorCritic / PPOTrainer / policy_drl) |
-| `metrics.py` | ATT, Gini(edge load), worst-link saturation, throughput |
-| `run_compare.py` | run all policies on shared demand, print the benchmark table |
-| `train_drl.py` | train the PPO agent (resampled hotspot demand) and save the best checkpoint |
+| `config.py` | paths + every hyper-parameter (single source of truth) |
+| `network.py` | `build_graph_for(name)` — one entry point for both networks |
+| `taichung_loader.py` | Taichung OSM CSVs → routing DiGraph; reads predicted edge speeds |
+| `policies.py` | the seven routing policies + `RoutingEnv` / `EGATActorCritic` / `PPOTrainer` |
+| `metrics.py` | ATT, TSTT, Gini(edge load), worst-link ρ, throughput |
+| `run_compare.py` | run every policy on shared demand; multi-seed statistics |
+| `train_drl.py` | train the PPO + Residual E-GAT agent, save the best checkpoint |
+| `make_drl_input.py` | ensemble the two models' section predictions → per-edge speeds |
+| `calibrate_taichung.py` | find the (vehicles, capacity_scale) where congestion actually appears |
 | `pipeline.py` | orchestrator: (inference) → run_compare |
-| `stg{cn,at}_pred.npy` | model outputs, written here by `../ST*/run_infer.py` |
-| `data/adj_mx_dijsk.pkl` | vendored road-network adjacency (copy of `../STGAT/data/METR-LA/`) |
+| `stg{cn,at}_pred.npy` | METR-LA model outputs, written by `../ST*/run_infer.py` |
+| `taichung_pred_{stgcn,stgat}.npy` | Taichung section-level predictions (raw, unclamped) |
+| `taichung_pred_edges.csv` | per-edge speeds — what the router consumes |
+| `data/adj_mx_dijsk.pkl` | vendored METR-LA adjacency |
+
+---
 
 ## Data flow
 
 ```
-stgcn_pred.npy ─┐
-                ├─ ensemble(0.7/0.3, clamp) ─► node speed (mph)
-stgat_pred.npy ─┘                                    │
-adj_mx_dijsk.pkl ─ recover length d∝√(−ln adj) ──────┤
-                                                     ▼
-                       directed road graph  (length, t0, tpred, capacity)
-                                                     │
-                 OD demand — "hotspot" funnels many cars toward a few hub nodes
-                          (this is what creates the herding pressure)
-                                                     │
-        ┌──────────────┬────────────────────┬──────────────────────┐
-     static        prediction-greedy      load-aware          global-penalty
-  (free-flow)        (HERDING)          (coordination)         (OURS, eq. 4)
-        └──────────────┴────────────────────┴──────────────────────┘
-                                                     ▼
-        score every policy under the SAME realized BPR congestion model:
-        ATT · Gini(edge load) · worst-link saturation ρ · throughput
+                        METR-LA                              Taichung
+              stgcn_pred.npy ─┐                  taichung_pred_stgcn.npy ─┐
+              stgat_pred.npy ─┴─ ensemble        taichung_pred_stgat.npy ─┴─ make_drl_input.py
+                               0.7/0.3                        (clamp, ensemble,
+                                  │                            section → OSM edges)
+              adj_mx_dijsk.pkl    │                  Map/graph_*_taichung.csv   │
+              d ∝ √(−ln adj) ─────┤                  length_m / speed limit ────┤
+                                  ▼                                             ▼
+                         network.build_graph_for(name)  →  directed road graph
+                            edges carry: length · t0 · tpred · tpred_stgcn ·
+                                         tpred_stgat · cap
+                                              │
+                    OD demand — "hotspot" funnels many cars at a few hub nodes,
+                             which is what creates the herding pressure
+                                              │
+    ┌──────┬────────┬────────┬─────────┬────────────┬──────────────┬──────────┐
+  1 static 2 STGCN  3 STGAT  4 hybrid  5 load-aware 6 global-      7 DRL
+   (free-  +Dijkstra +Dijkstra +Dijkstra  (coord.)     penalty       (PPO +
+    flow)                     (HERDING)                (oracle)      E-GAT)
+    └──────┴────────┴────────┴─────────┴────────────┴──────────────┴──────────┘
+                                              ▼
+        every policy is re-scored under the SAME realized BPR congestion model:
+        ATT · TSTT · Gini(edge load) · worst-link ρ · throughput
 ```
 
-The four policies are a deliberate **ablation**:
+---
 
-| policy | prediction? | coordination (load feedback)? | global penalty (eq. 4)? | role |
-|---|:--:|:--:|:--:|---|
-| `static` | ✗ | ✗ | ✗ | proposal baseline ① Dijkstra |
-| `prediction-greedy` | ✓ | ✗ | ✗ | proposal baseline ②③ — **the herding case** |
-| `load-aware` | ✓ | ✓ | ✗ | isolates the value of coordination |
-| `global-penalty` | ✓ | ✓ | ✓ | the method (STGCN+STGAT + global penalty) |
+## The seven policies
 
-## Result (default `hotspot` run)
+A deliberate ablation ladder — each row adds exactly one capability:
 
-```
-policy                      |     ATT |    worst ρ | Gini(load)
-static (free-flow Dijkstra) |  0.1118 |     4.5000 |    0.8985
-prediction-greedy (HERDING) |  0.0349 |     2.3889 |    0.8526   <- everyone piles on the same links
-load-aware (coord. only)    |  0.0226 |     0.3889 |    0.49xx
-global-penalty (eq.4)       |  0.0229 |     0.2222 |    0.37xx   <- load spread out
+| # | policy | prediction? | coordination? | eq. 4? | maps to |
+|---|---|:--:|:--:|:--:|---|
+| 1 | `static` (free-flow Dijkstra) | ✗ | ✗ | ✗ | proposal baseline ① |
+| 2 | `STGCN + Dijkstra` | ✓ STGCN only | ✗ | ✗ | proposal baseline ② |
+| 3 | `STGAT + Dijkstra` | ✓ STGAT only | ✗ | ✗ | proposal baseline ③ |
+| 4 | `hybrid + Dijkstra` | ✓ ensemble | ✗ | ✗ | **the herding case — Δ is measured against it** |
+| 5 | `load-aware` | ✓ | ✓ | ✗ | ablation: isolates coordination |
+| 6 | `global-penalty` | ✓ | ✓ | ✓ | **oracle / upper bound** |
+| 7 | `drl-agent` | ✓ | ✓ | ✓ | **the method** (proposal baseline ④) |
 
-Δ vs herding baseline:  Gini ↓ ~56% | worst-link ρ ↓ ~90% | ATT ↓ ~30%
-```
+Two mechanisms make this work:
 
-Two things to read off this:
+- **BPR volume-delay** `t(load) = t₀(1 + 0.15·(load/cap)⁴)` — piling vehicles onto one
+  link inflates its time. Without it the herding effect does not exist numerically.
+  It is a static stand-in for SUMO; the policy and metric code will not change when
+  SUMO replaces it.
+- **eq. 4 generalized cost** — `α·t_e(load) + λ₁·max(0, ρ−ρ_th)² + λ₂·max(0, ρ−ρ̄)`,
+  the proposal's global penalty rewritten as an edge weight.
 
-1. **It reproduces the proposal's predicted numbers** (section 五: "Gini ↓30%+,
-   worst-link saturation ↓20%+, ATT ↓20–30% under burst load").
-2. **The ablation shows what the global penalty buys.** Most of the ATT gain comes
-   from *coordination* (`load-aware`). The **global penalty's own contribution is
-   equity**: it pushes Gini and worst-link ρ down further for ~1% extra ATT — exactly
-   the Wardrop *System-Optimum vs User-Equilibrium* trade-off the proposal cites
-   (Wardrop 1952): give up a sliver of individual speed to kill the stampede.
+> **(6) is the oracle, not the method.** It routes every vehicle with a full Dijkstra
+> over exact global load — capabilities the DRL agent deliberately lacks in exchange for
+> <50 ms reactive decisions. Treat it as the **upper bound for the eq. 4 objective**, and
+> note it is *not* an upper bound on every metric: the agent's worst-link ρ beats it.
 
-(Exact numbers print from `run_compare.py`; the load-aware/global-penalty Gini values
-shift slightly run-to-run with demand sampling but the ordering is stable.)
+---
 
-## Why there is no TSP / coordinate-embedding code here
+## Reporting protocol
 
-An earlier prototype embedded the cost matrix into 2-D (MDS) and fed a pretrained
-Euclidean-**TSP** solver. That approach was removed because:
+A single demand draw varies too much to conclude from, so `--repeat N` draws N demands
+and reports **mean ± std** with **paired** deltas (computed within each seed, then
+averaged — this cancels the demand-to-demand variance that hits every policy alike).
 
-- Navigation is **point-to-point routing on a graph**, not a closed salesman tour.
-- A distance÷speed cost matrix is **non-metric**, so a 2-D embedding is lossy and the
-  solver ends up optimizing distorted geometry while being scored on the true cost.
-- The **global penalty / herding** — the project's novelty — needs many vehicles and a
-  per-link saturation term, which a single TSP tour cannot express.
-
-Everything here stays on the graph and routes many vehicles, so the herding effect is
-something the model can actually exhibit and mitigate.
-
-## The DRL agent (PPO) — scaffolded
-
-`policies.py` now contains the interface for the proposal's learned decision module
-(§4.4: POMDP + PPO + global-penalty reward). `policy_global_penalty` remains the
-analytic **oracle** the agent should learn to match or beat.
-
-- **`RoutingEnv`** — the POMDP. State = (graph, predicted edge times, current
-  saturation, current node + destination); action = pick a neighbour; per-step reward
-  = the negative eq. (4) generalized cost. Load persists across vehicles, so the
-  penalty couples them (the herding-suppression signal). One episode = all vehicles.
-- **`EGATActorCritic`** — trainable actor-critic (PyTorch), PPO-ready
-  (`act` / `act_with_value` / `evaluate_actions`). The encoder is a minimal MLP
-  placeholder — **swap it for the Residual E-GAT** (Lei et al. 2022), keeping the I/O
-  `forward(feats[k,F]) -> (logits[k], value)`.
-- **`PPOTrainer`** — clipped-surrogate PPO loop (eq. 5) with GAE. Add reward
-  normalisation / orthogonal init / LR annealing for the proposal's "code-level
-  optimisation".
-- **`policy_drl(g, demand, agent)`** — rolls any agent out to paths, same contract as
-  the other policies, so it drops into the comparison.
-
-Use it in the benchmark:
-
-```
-python run_compare.py --drl placeholder    # analytic A*-greedy stand-in (runs now, no training)
-python run_compare.py --drl path/to/agent.pt   # a trained EGATActorCritic checkpoint
+```bash
+python run_compare.py --repeat 10 --drl checkpoints/metr-la/drl_agent.pt
 ```
 
-Train the agent with `train_drl.py`. It resamples hotspot demand each episode,
-evaluates on a fixed held-out demand against the herding/oracle references, and saves
-the checkpoint with the best Gini-weighted score (0.25·ATT + 0.5·Gini + 0.25·worst-ρ):
+METR-LA, 5 seeds — note how much tighter Gini is than ATT:
 
-```
-python train_drl.py                                    # ~200 iters, CPU -> drl_agent.pt
-python train_drl.py --iters 500 --train-vehicles 200   # longer run
-python run_compare.py --drl drl_agent.pt               # benchmark the trained agent
-```
+| metric | Δ vs herding baseline | std |
+|---|---|---|
+| **Gini(load)** | **−61.8%** | **±0.6%** |
+| worst-link ρ | −88.0% | ±2.0% |
+| ATT | −23.8% | ±8.2% |
 
-`metrics.py` + `run_compare.py` are the **evaluation harness** — baselines and metrics
-already wired. When SUMO is ready, swap the static **BPR** link model for SUMO's
-microscopic feedback; the policy and metric code stay the same.
+The headline claim rests on the most stable metric; ATT swings because some demand
+draws are simply harder than others.
 
-## Limitations
+---
 
-- Travel times are in **relative units** (the kernel's σ is unknown, so distances are
-  relative). Compare ratios, not absolute seconds.
-- **Capacity is uniform** (a proxy). The real Taichung network gets per-road capacity
-  from OSM lane counts / road class.
-- Only the **next-step** prediction is used (one snapshot), not the 15/30/60-min
-  horizon — same simplification `run_infer.py` makes.
+## Results (METR-LA, hotspot, 300 vehicles)
+
+| policy | ATT | worst-link ρ | Gini(load) |
+|---|---:|---:|---:|
+| 1 static | 0.1118 | 4.500 | 0.910 |
+| 4 hybrid + Dijkstra (**herding baseline**) | 0.0349 | 2.389 | 0.869 |
+| 5 load-aware | 0.0226 | 0.389 | 0.546 |
+| 6 global-penalty (oracle) | 0.0235 | 0.222 | 0.363 |
+| **7 DRL agent (PPO + E-GAT)** | **0.0232** | **0.167** | **0.574** |
+
+Against the herding baseline the DRL agent reaches **ATT −33.7%, worst-link ρ −93.0%,
+Gini −35.0%** — clearing the proposal's targets (Gini ↓30%+, worst-link ↓20%+,
+ATT ↓20–30%), with worst-link ρ better than the oracle's.
+
+**Policies 2, 3 and 4 land on nearly identical Gini (0.868 / 0.870 / 0.869).** Whichever
+model's forecast you follow, greedily chasing the predicted-fastest road herds just as
+badly — the improvement comes from *coordination* and the *global penalty*, not from
+prediction quality. That is the project's central claim, isolated.
+
+---
+
+## Notes and limitations
+
+- **METR-LA travel times are relative** (the kernel's σ is unknown). Compare ratios,
+  not absolute seconds. Taichung times are real seconds.
+- **Taichung capacity needs calibrating.** The CSV holds veh/h (1,360–8,158); at a few
+  hundred vehicles nothing congests, so `calibrate_taichung.py` finds the
+  `capacity_scale` that puts the herding baseline at a target worst-link ρ.
+- **93.7% of Taichung edges have no speed limit** in the OSM export; they fall back to
+  50 km/h (`config.TAICHUNG_DEFAULT_SPEED_KMH`). Since diversion depends on the
+  arterial-vs-side-street speed ratio, this is worth a sensitivity check.
+- **Prediction coverage is partial**: 524 of 20,346 Taichung edges (2.6%) currently get
+  a predicted speed; the rest keep their free-flow time. Pruning the network to
+  200–300 nodes will raise this sharply — but only if the pruning keeps those corridors.
+- **`--repeat` is the reporting mode.** Single-seed numbers are for quick checks only.
+- Adding the DRL policy shifts every policy's Gini slightly, because Gini is computed
+  over the union of edges any policy used and the extra policy enlarges that set. The
+  ordering and the conclusions do not change.
+
+See `../paper_work/實驗設計.md` for the full experimental design and
+`../paper_work/實驗記錄_DRL決策模組.md` for the development history.
