@@ -348,55 +348,88 @@ so the demand-to-demand variance that hits every policy alike cancels out. Polic
 listed twice: the same weights under greedy decoding and under beam search. **Quote the
 beam row** — see the warning below the table for why.
 
+Baseline 4 routes on the fusion forecast, and the agent was trained on the same input,
+so the whole table is fed by the model the architecture section describes.
+
 **S2 — rush-hour funnel (the main scenario)**
 
 | policy | served% | ATT | worst-link ρ | Gini(load) |
 |---|---:|---:|---:|---:|
-| 1 static (free-flow) | 100% | 848.3±161.6 | **3.3302±0.2703** | 0.7201 |
-| 2 STGCN + Dijkstra | 100% | 861.2±164.1 | **3.3302±0.2703** | 0.7142 |
-| 3 STGAT + Dijkstra | 100% | 866.5±164.6 | **3.3302±0.2703** | 0.7145 |
-| 4 hybrid + Dijkstra (**herding baseline**) | 100% | 866.6±164.6 | **3.3302±0.2703** | 0.7147 |
-| 5 load-aware (coordination only) | 100% | 476.4±9.8 | 2.1099±0.0446 | 0.6915 |
-| 6 global-penalty (eq. 4 oracle) | 100% | 468.2±11.7 | **1.9282±0.0837** | **0.5869** |
-| 7 DRL agent — greedy | 96.4%±1.5 | 526.2±36.5 | 2.4218±0.1907 | 0.6284 |
-| **7 DRL agent — beam-8** | **100.0%±0.0** | 546.3±37.1 | 2.5058±0.1779 | 0.6436 |
+| 1 static (free-flow) | 100% | 848.3±161.6 | **3.3302±0.2703** | 0.7180 |
+| 2 STGCN + Dijkstra | 100% | 861.2±164.1 | **3.3302±0.2703** | 0.7121 |
+| 3 STGAT + Dijkstra | 100% | 866.5±164.6 | **3.3302±0.2703** | 0.7123 |
+| 4 hybrid + Dijkstra (**herding baseline**) | 100% | 860.4±166.9 | **3.3302±0.2703** | 0.7128 |
+| 5 load-aware (coordination only) | 100% | 476.4±9.8 | 2.1099±0.0446 | 0.6892 |
+| 6 global-penalty (eq. 4 oracle) | 100% | 468.2±11.7 | **1.9282±0.0837** | **0.5838** |
+| 7 DRL agent — greedy | 95.4%±1.8 | 515.4±15.6 | 2.3858±0.0999 | 0.6248 |
+| **7 DRL agent — beam-8** | **99.9%±0.2** | 539.3±33.8 | 2.5075±0.1781 | 0.6407 |
 
 | Δ vs herding baseline | ATT | Gini | worst-link ρ |
 |---|---:|---:|---:|
-| 5 load-aware | −43.4±9.5% | −3.2±0.5% | −36.2±5.8% |
-| 6 oracle | −44.5±8.7% | −17.9±0.7% | −41.9±2.7% |
-| 7 DRL — greedy | −38.1±7.3% | −12.1±1.1% | −27.2±1.8% |
-| **7 DRL — beam-8** | **−35.7±7.4%** | **−9.9±0.8%** | **−24.7±2.1%** |
+| 5 load-aware | −42.9±9.8% | −3.3±0.5% | −36.2±5.8% |
+| 6 oracle | −44.0±9.0% | −18.1±0.7% | −41.9±2.7% |
+| 7 DRL — greedy | −38.4±9.7% | −12.3±0.8% | −28.1±3.6% |
+| **7 DRL — beam-8** | **−36.0±7.9%** | **−10.1±0.6%** | **−24.6±2.0%** |
 
 **S3 — an arterial closes 10% of the way through the demand**
 
 | Δ vs herding baseline | ATT | Gini | worst-link ρ | served% |
 |---|---:|---:|---:|---:|
-| 5 load-aware | −59.9±3.9% | −7.3±0.4% | −35.6±4.5% | 100% |
-| 6 oracle | −60.7±4.0% | −16.6±0.8% | −43.3±2.2% | 100% |
-| 7 DRL — greedy | −63.9±4.6% ⚠️ | −12.9±0.5% ⚠️ | −41.1±4.2% ⚠️ | **81.4%±2.8** |
-| **7 DRL — beam-8** | **−51.9±6.2%** | **−13.1±1.0%** | **−26.8±5.0%** | **96.4%±1.4** |
+| 5 load-aware | −60.4±4.1% | −7.7±0.5% | −35.7±4.5% | 100% |
+| 6 oracle | −61.2±4.1% | −17.4±0.8% | −43.3±2.2% | 100% |
+| 7 DRL — greedy | −63.0±4.5% ⚠️ | −13.6±1.0% ⚠️ | −36.1±3.4% ⚠️ | **82.8%±2.8** |
+| **7 DRL — beam-8** | **−55.8±5.6%** | **−12.9±0.8%** | **−27.5±2.9%** | **96.0%±1.8** |
 
 Against the proposal's targets, using the beam rows:
 
 | metric | target | S2 | S3 |
 |---|---|---:|---:|
-| ATT (burst load) | ↓20–30% | **−35.7%** ✅ | **−51.9%** ✅ |
-| worst-link ρ | ↓20% | **−24.7%** ✅ | **−26.8%** ✅ |
-| Gini(edge load) | ↓30% | −9.9% ❌ | −13.1% ❌ |
+| ATT (burst load) | ↓20–30% | **−36.0%** ✅ | **−55.8%** ✅ |
+| worst-link ρ | ↓20% | **−24.6%** ✅ | **−27.5%** ✅ |
+| Gini(edge load) | ↓30% | −10.1% ❌ | −12.9% ❌ |
+
+#### Feeding the decision layer from fusion changed nothing measurable
+
+Wiring gated fusion into the routing graph and retraining the agent on it moves every
+headline by less than one standard deviation:
+
+| | ensemble-fed agent | fusion-fed agent | gap |
+|---|---:|---:|---:|
+| S2 ATT Δ | −35.7±7.4% | −36.0±7.9% | 0.04σ |
+| S2 Gini Δ | −9.9±0.8% | −10.1±0.6% | 0.25σ |
+| S2 worst-ρ Δ | −24.7±2.1% | −24.6±2.0% | 0.05σ |
+| S3 ATT Δ | −51.9±6.2% | −55.8±5.6% | 0.7σ |
+| S3 Gini Δ | −13.1±1.0% | −12.9±0.8% | 0.2σ |
+| S3 worst-ρ Δ | −26.8±5.0% | −27.5±2.9% | 0.14σ |
+
+The two forecasts are genuinely different — correlation 0.985 at 15 min, 3.0% median
+relative difference, against 0.998 and 0.97% for the pair (hybrid, STGAT) the routing
+already treats as interchangeable. And baseline 4 did move: 866.6 → 860.4 s in S2 but
+860.4 → 1432.7 in S3, i.e. *better* under one scenario and *worse* under the other by
+about 1% each. Policies 1–3 are unchanged to four decimals, confirming that only the
+row which consumes the hybrid forecast was touched.
+
+This is the fourth independent check on the same conclusion, and the strongest: the
+earlier three varied coverage or the forecast source, this one also **retrained the
+agent on the new observations**.
+
+⚠️ It compares two agents from single training runs, so "fusion makes no difference" and
+"PPO's run-to-run variance swamps the difference" cannot be separated here. The
+structural argument — 86% of routes identical, 14.1% coverage by length — is what makes
+the first far more likely.
 
 #### 🔴 A policy that gives up on the hard trips can "beat" the upper bound
 
-Look at the S3 greedy row: **ATT −63.9%, better than the oracle's −60.7%.** It is not
-better. It abandoned 18.6% of the demand, and the trips it abandoned are the hard ones,
+Look at the S3 greedy row: **ATT −63.0%, better than the oracle's −61.2%.** It is not
+better. It abandoned 17.2% of the demand, and the trips it abandoned are the hard ones,
 so its average is taken over an easier set. Beam search recovers them and the number
-falls to −51.9%, behind the oracle exactly as it should be.
+falls to −55.8%, behind the oracle exactly as it should be.
 
 The inflation scales with the attrition rate:
 
 ```
-S2   3.6% abandoned  ->  ATT Δ inflated by  2.4pp
-S3  18.6% abandoned  ->  ATT Δ inflated by 12.0pp   <- enough to pass the oracle
+S2   4.6% abandoned  ->  ATT Δ inflated by  2.4pp
+S3  17.2% abandoned  ->  ATT Δ inflated by  7.2pp   <- enough to pass the oracle
 ```
 
 This is why `run_compare.py` puts served% in the first column and flags any row below
@@ -410,32 +443,39 @@ every edge is still chosen by the policy (Lei et al. 2022 report greedy and beam
 side for the same reason). `test_beam.py` checks that width 1 reproduces greedy route
 for route before any wider number is read.
 
-It fixes **completeness**: dead ends drop 29.1 → 0 in S2 and 143 → 27.4 in S3. It does
-**not** fix route quality — widening the beam fourfold on the undisturbed network moves
-ATT by 0.8%, and the 10-seed S2 headline gets *worse* (−38.1% → −35.7%) because the
-recovered trips are expensive ones. The 11.5% gap to the oracle is model error, not
+It fixes **completeness**: dead ends drop 36.8 → 0.5 in S2 and 132.4 → 29.6 in S3. It
+does **not** fix route quality — widening the beam fourfold on the undisturbed network
+moves ATT by 0.8%, and the 10-seed S2 headline gets *worse* (−38.4% → −36.0%) because
+the recovered trips are expensive ones. The 11.5% gap to the oracle is model error, not
 search error.
 
 #### Reading the rest of the table
 
-**Gini falls short of the 30% target, and so does the oracle** (−17.9% in S2, −16.6% in
+**Gini falls short of the 30% target, and so does the oracle** (−18.1% in S2, −17.4% in
 S3). On METR-LA the ceiling was −50.7% and the agent reached −35.0%; here the ceiling
-itself is −17.9%, because the starting distribution is already more even (0.71 against
+itself is −18.1%, because the starting distribution is already more even (0.71 against
 METR-LA's 0.87) and the hotspot demand funnels into four hubs whose last few hops no
 policy can avoid. That gap is a property of the arena and the demand, not of training.
 
 **Policies 1–4 are indistinguishable** — identical worst-link ρ down to the standard
-deviation, Gini within 0.001. At 24.6% prediction coverage, following a forecast does
+deviation, and the ATT spread between them (1.3–1.7%) is smaller than its own
+seed-to-seed variance (±2.1%). At 24.6% prediction coverage, following a forecast does
 not change the route (see below), so the improvement comes entirely from *coordination*
 and the *global penalty*. That is the project's central claim, isolated about as
 cleanly as it can be.
 
-**The agent beats pure coordination on Gini and only on Gini** (S2: −9.9% vs −3.2%;
-S3: −13.1% vs −7.3%) while giving up ATT and worst-link ρ. Policy 5 has congestion
+That ±2.1% is itself a correction. Under the fixed-weight ensemble the same spread read
+±0.2%, which looked like remarkable stability; it was an artefact of the 0.20/0.80
+weight making baseline 4's routes nearly identical to policy 3's. Fusion separates them,
+and the honest statement becomes "the differences are smaller than the noise" rather
+than "the differences are tiny".
+
+**The agent beats pure coordination on Gini and only on Gini** (S2: −10.1% vs −3.3%;
+S3: −12.9% vs −7.7%) while giving up ATT and worst-link ρ. Policy 5 has congestion
 feedback but no eq. 4 penalty, so it is good at avoiding the worst link and poor at
 evening out the distribution; the agent trades travel time for spread. That is eq. 4
-working as designed — and under the incident it captures 79% of the oracle's Gini
-improvement, against 55% on the undisturbed network.
+working as designed — and under the incident it captures 74% of the oracle's Gini
+improvement, against 56% on the undisturbed network.
 
 ⚠️ **Gini is computed over the union of edges any policy used**, so adding a row shifts
 every row's Gini slightly (ATT and worst-link ρ are unaffected). Compare Gini only
@@ -445,10 +485,10 @@ within one run.
 
 | policy | ATT std over 10 demands | vs baseline |
 |---|---:|---:|
-| 1 static / 4 herding | ±161.6 / ±164.6 | — |
+| 1 static / 4 herding | ±161.6 / ±166.9 | — |
 | 5 load-aware | **±9.8** | **16× less** |
 | 6 oracle | ±11.7 | 14× less |
-| 7 DRL agent (beam-8) | ±37.1 | 4× less |
+| 7 DRL agent (beam-8) | ±33.8 | 5× less |
 
 BPR's fourth-power term makes "everyone on the same link" extremely sensitive to which
 demand you draw: the uncoordinated policies swing ±19% in mean travel time on the same
@@ -501,12 +541,12 @@ of the agent. That last one is the trap: skip it and the agent's only sense of "
 is left" points down a road that no longer exists, and nothing raises.
 
 The 10-seed result is in the decision table above: the incident nearly doubles the
-herding baseline's travel time (867 → 1412 s), and the coordinated policies' advantage
-grows with it — the oracle goes from −44.5% to −60.7%, the agent from −35.7% to −51.9%.
+herding baseline's travel time (860 → 1433 s), and the coordinated policies' advantage
+grows with it — the oracle goes from −44.0% to −61.2%, the agent from −36.0% to −55.8%.
 **Gini does not follow**: the oracle's Gini improvement actually shrinks slightly
-(−17.9% → −16.6%), so the incident scenario is not the lever that reaches the 30%
-target. The agent does close more of the gap, though, capturing 79% of the oracle's Gini
-improvement against 55% on the undisturbed network.
+(−18.1% → −17.4%), so the incident scenario is not the lever that reaches the 30%
+target. The agent does close more of the gap, though, capturing 74% of the oracle's Gini
+improvement against 56% on the undisturbed network.
 
 Two things the arena measurements settled beforehand, neither of which was the expected
 answer:
