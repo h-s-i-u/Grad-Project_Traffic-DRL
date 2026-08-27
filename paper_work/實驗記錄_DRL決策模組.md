@@ -48,7 +48,6 @@
 | 06-21 16:31 | 整合層 README 定稿 | `integration/README.md` |
 | **06-21 19:57** | **E-GAT agent 訓練完成** | `drl_agent.pt` |
 | 07-28 | Benchmark 重跑（random/hotspot 雙情境） | `results.json` (07-28 23:20) |
-
 | 07-31 | 收到台中 OSM 路網（黃少鯤） | `Map/*.csv` (07-31 15:03) |
 | **08-03** | 台中接入：`.env`、loader、per-edge 容量、校準、`--graph` 分支 | `taichung_loader.py` 等 (08-03 21:44–22:05) |
 | 08-05 | 黃少鯤交付 TDX 資料與新版路網（7,489 節點）；資料 pipeline 重構 | `Map/*.csv`、`build_network.py` |
@@ -65,6 +64,7 @@
 | 08-21 | `實驗設計.md` 更新至 **v4**（v3 停在 08-06 的 175 節點，多數數字已失效） | `paper_work/實驗設計.md` |
 | **08-22 ~ 24** | **S3 主幹道封閉實作**（`closure.py` + 3 個接觸點）；場域量測發現「負載佔比預測不了衝擊」「封閉後的斷裂是裁切假象」「`--close-at` 使 Gini 方向反轉」 | `integration/closure.py`、`results_s3.json` |
 | **08-25** | **HA 基準完成**（計畫書 §4.6 最後一個缺席基準）；三個關於資料本身的發現：領先幅度隨基準翻轉、異常一小時內均值回歸、尖峰是最規則的時段 | `integration/ha_baseline.py` |
+| **08-27** | **Gated Fusion 接進決策層並重訓**：三個指標全部落在 1σ 內——**§13.13 的第四個佐證，且這次連 agent 都重訓了**。🔴 訓練 log 揭露選取偏差：**served 越高分數越低**，字典序必然挑中卡在門檻的那個 | `drl_fusion_togo25.pt`、`make_drl_input --source fusion` |
 | **08-25** | **Beam search 解碼**：⑦ 第一次在 S2/S3 **都完全可比**（served 100.0%±0.0 / 96.4%±1.4）。🔴 貪婪解碼在 S3 曾**看似打贏 oracle**（−63.9% vs −60.7%），純屬 18.6% 放棄率造成的 12pp 灌水 | `policies.py`、`test_beam.py`、`run_compare --beam` |
 | **08-25** | **togo25 正式結果**：10 seeds 下 ATT −38.1%、Gini −12.3%、**worst-ρ −27.2±1.8% 跨過計畫書門檻**；同一批 741 台車上縮小 18% 的 oracle 差距；**繞路統計與 oracle 逐位相同但仍慢 11.5%** → beam search 的暫緩理由失效 | `drl_togo25_f10_800it.pt`、`diagnose_agent.py` |
 | **08-25** | **Gated Fusion 訓練完成**：test 60 min **3.5579（勝 STGAT 1.9%）**、15 min 打平；閘門自己學到 0.83（= 固定權重最佳值）且逐時段變動；**改善主因是 STGCN 補了 time-of-day，不是閘控**——計畫書「STGCN 管規則性」這半個前提原本不成立，補上後成立 | `fusion/checkpoints/fusion_c.pt` |
@@ -468,9 +468,7 @@ agent 在 ATT、worst-ρ 追平甚至勝出，**唯獨 Gini 落後**（0.574 vs 
 
 ## 12. 階段十：台中真實路網接入（07-31 ~ 08-03）
 
-
 ### 12.1 收到的資料（黃少鯤）
-
 | 檔案 | 內容 |
 |---|---|
 | `Map/graph_edges_taichung.csv` | 15064 邊：`from_node, to_node, length_m, free_flow_speed_kmh, lanes, capacity` |
@@ -500,7 +498,6 @@ sample shortest-path hops: min 2 / mean 33.6 / max 66
 ```
 
 **四項發現**：
-
 1. **94% 的邊（14136/15031）缺速限** → 以 30 km/h 回填。建議請黃少鯤用 OSM `highway` 等級補齊。
 2. **圖已 99% 強連通**（5520/5559，有向）→ 不需 `bidirectional=True`。
 3. **容量單位不相容**：真實 veh/h（1360–8158）vs METR-LA 的 `cap=18`。
@@ -562,7 +559,6 @@ metr-la  -> 207 nodes; 15778 edges; default_max_hops=60
 ## 13. 階段十一：TDX 資料鏈、台中預測訓練、決策層場域、S3 情境、Gated Fusion 與 beam search（08-04 ~ 08-25）
 
 ### 13.1 資料 pipeline 重構（靜態幾何／動態時序分離）
-
 
 黃少鯤交付的原始流程把「幾何計算」與「時序處理」混在同一支程式（`build_taichung_stgcn_dataset.py`），導致**每次微調鄰接參數都要重讀 11.9 GB 的原始 JSONL**。依相依性質重構為：
 
@@ -834,7 +830,6 @@ Dijkstra，當 97.4% 的邊 `tpred == t0` 時，預測最短路 ≈ 自由流最
 
 **動機**：計畫書 §4.2 將 CWA 氣候資料列為三大資料來源之一，§4.3 規劃注入 STGAT 的
 self-adaptive path，且 §5 的 MAE 目標（3.4–3.6）明白寫著「**理由是引入氣候特徵可降低
-
 極端天氣下的預測誤差**」。黃少鯤於 08-12 交付 CODiS 降雨資料。
 
 **先評估再投入**：加一個特徵通道意味著 STGCN／STGAT × 三時程共 **6 次重訓**，加上集成
@@ -936,7 +931,6 @@ lag 1h / 2h 的型態一致（0–1 mm 為 −2.85% / −1.89%，> 10 mm 為 +1.
 
 ### 13.10 ★ 路網三次迭代與資料鏈重建（08-12 ~ 08-13）
 
-
 黃少鯤交付了新版 OSM 匯出（`Map/Map_fined/`），欄位品質大幅提升，但**框選範圍**經過三次
 迭代才正確。這一節記錄的核心教訓是：**地圖的框選範圍會永久決定預測模組的節點數。**
 
@@ -956,7 +950,6 @@ lag 1h / 2h 的型態一致（0–1 mm 為 −2.85% / −1.89%，> 10 mm 為 +1.
 
 **驗證過的排除項**：簡化（§下方）只讓可用路段從 78 掉到 75，**損失 3 個**，
 屬長邊弦線的幾何誤差，可接受。**137 個的損失全部來自框選範圍**，與簡化無關。
-
 
 **給黃少鯤的規格**（由 TDX metadata 直接算出）：
 
@@ -2645,6 +2638,167 @@ beam search 買到的是**完整性**，不是品質。
 
 ---
 
+### 13.24 ★★ 把 Gated Fusion 接進決策層並重訓（08-27）
+
+§13.22 完成 fusion 之後，決策層仍在吃 `0.2/0.8` 的固定權重集成。**基準 ④ 的定義就是
+「所有車跟著 hybrid 預測走」，而 hybrid 從那時起應該是 gated fusion**——不改的話，
+報告的架構圖與實際產生數字的來源不一致。
+
+#### ① 接線：`make_drl_input.py --source fusion`
+
+`speed_hybrid` 改由 `dump_fusion_test_p3.npz` 的對應列取得（**同一個 target row 50273**，
+所以新舊 CSV 可逐邊比較）；`speed_stgcn` / `speed_stgat` **一字不動**，因為基準 ②③ 的
+定義就是「單一模型跟著自己的預測走」。
+
+新增 `taichung_pred_edges.meta.json`：兩份來源不同的 CSV 在磁碟上完全分不出來，
+而**它決定了某個 checkpoint 還算不算有效**。
+
+> 🔴 **必須重訓**：`tpred` 經由 `feats[:,1]` 與 `edge_static`（會進 state_dict 的 buffer）
+> 進入 agent 的**觀測**。換來源不重訓，就是 §13.16 ⑥ 那類靜默失配。
+> 獎勵不受影響——`_gcost` 建在 `t0` 上。
+
+#### ② 兩個預測來源的實際差異
+
+```
+15 分鐘（決策層用的）  corr 0.9850   中位相對差 3.04%   p90 6.32%
+60 分鐘                corr 0.8961   中位相對差 3.34%   p90 17.04%
+對照：hybrid vs stgat  corr 0.9983   中位相對差 0.97%   ← 決策層目前視為等同的那一對
+```
+
+**fusion 是實質不同的預測**（差異是 hybrid↔stgat 的 3 倍以上），所以「反正一樣」
+不能當成不重訓的理由。
+
+#### ③ ★★ 但重訓之後，三個指標全部落在 1σ 內
+
+10 seeds、beam-8 解碼：
+
+| | ensemble agent | **fusion agent** | 差距 |
+|---|---:|---:|---:|
+| **S2** served% | 100.0±0.0 | 99.9±0.2 | |
+| S2 ATT Δ | −35.7±7.4% | **−36.0±7.9%** | 0.04σ |
+| S2 Gini Δ | −9.9±0.8% | **−10.1±0.6%** | 0.25σ |
+| S2 worst-ρ Δ | −24.7±2.1% | **−24.6±2.0%** | 0.05σ |
+| **S3** served% | 96.4±1.4 | 96.0±1.8 | |
+| S3 ATT Δ | −51.9±6.2% | **−55.8±5.6%** | 0.7σ |
+| S3 Gini Δ | −13.1±1.0% | **−12.9±0.8%** | 0.2σ |
+| S3 worst-ρ Δ | −26.8±5.0% | **−27.5±2.9%** | 0.14σ |
+
+> **這是 §13.13「預測層對路由沒有可測量影響」的第四個獨立佐證，而且最強**——
+> 前三個只換了覆蓋率或預測來源，**這一次連 agent 都以新的觀測重訓了**。
+
+#### ④ ④ 在兩個情境往相反方向動，幅度都約 1%
+
+```
+        ensemble    fusion
+S2 ④     866.55     860.42     ← 快 0.71%
+S3 ④    1412.4     1432.7      ← 慢 1.44%
+```
+
+①②③ 的 ATT 在兩次執行中**逐位相同**（848.2659 / 861.2169 / 866.5431），
+證實只有 ④ 被改到，接線正確。
+
+**同一個預測來源在一個情境變好、另一個變壞**——這正是「跟著預測走是擲硬幣」的樣子。
+不是 fusion 比較差，是預測在此覆蓋率下對路由沒有方向性的貢獻。
+
+#### ⑤ ★★ 一個被揭穿的假象：①②③ vs ④ 的「極小標準差」
+
+```
+S3，① static vs ④ 的 ATT Δ
+  ensemble   −0.3 ± 0.2%
+  fusion     −1.7 ± 2.1%     ← 標準差變成 10 倍
+```
+
+§13.15 ② 曾把 `±0.2%` 讀成「四者的塌陷極度穩定」。**那其實是 hybrid ≈ STGAT 的副產品**
+——`0.2/0.8` 讓 ④ 的路徑幾乎逐條等於 ③，配對 Δ 因此幾乎沒有變異。
+
+fusion 打破簡併後，真實的變異顯露出來（±2.1%），而 ①②③ 相對 ④ 的差距（1.3–1.7%）
+**小於那個變異**，所以四者仍然無法區分。**結論不變，但理由從「差異極小」修正為
+「差異小於雜訊」**——後者才是誠實的說法。
+
+> 同時，§13.16 ① 的預測應驗了：該節寫「要讓 ③④ 分開，得先讓兩個模型的預測真正不同
+> （Gated Fusion），而非調權重比例」。現在 ③ vs ④ 是 **+0.8±0.7%**（S2），
+> 不再是 `+0.0±0.0%`（路徑逐條相同）。
+
+#### ⑥ 🔴🔴 訓練 log 揭露的選取偏差：**served 越高，分數越低**
+
+fusion 版的 18 個合格 checkpoint（served ≥ 95%），按 served 分組：
+
+| served | 平均 score | n |
+|---|---:|---:|
+| **95%** | **+0.258** | 4 |
+| 96% | +0.246 | 3 |
+| 97% | +0.238 | 3 |
+| 98% | +0.233 | 5 |
+| 99% | +0.230 | 3 |
+
+**單調遞減。** 機制與 §13.23 ④ 完全相同，只是發生在訓練內部：
+
+```python
+score = 0.25*rel(ATT) + 0.50*rel(Gini) + 0.25*rel(worst-ρ)
+        └── 三項都只在「已送達」的車上計算 ──┘
+score = improv - 2.0 * max(0, min_served - served)
+                 └── 只在低於門檻時扣分；過門檻之後完全不修正 ──┘
+```
+
+放棄 5% 最難的行程，三個指標同時被美化，而**過了門檻沒有任何補償**。
+
+🔴 **所以字典序選取必然挑中「剛好卡在 95%」的那一個。**
+§13.14 修好了「低於門檻的 checkpoint 獲勝」，**但沒有修「最邊緣的合格者獲勝」**。
+
+**後果看得見**：
+
+```
+iter 400  served 95%  score +0.277   ← 被選中
+iter 600  served 99%  score +0.243
+iter 750  served 99%  score +0.227
+```
+
+benchmark 的貪婪列因此是 **served 95.4%±1.8——跨在門檻上**，部分 seed 低於 95%。
+選 iter 600 的話餘裕會大得多。（beam-8 之後兩者都是 99.9%，所以報告數字不受影響，
+但那是運氣不是設計。）
+
+⚠️ 此型態在 ensemble 版的 log 裡**不明顯**（95%:.221、96%:.223、98%:.225、99%:.218，
+幾乎持平），所以是「這一次很清楚」，不是「兩次都如此」。**但機制是結構性的。**
+
+**修法**（約 5 行，**暫不實作**）：合格者之中，分數差距在 1σ 內就取 served 最高者。
+不實作的理由：beam-8 之後報告數字不受影響；改了要重訓才有意義；而它作為
+**§13.23 ④ 在訓練層的翻版**，記錄下來比修掉更有價值。
+
+#### ⑦ 訓練分數的水位略高，但沒有轉移到 benchmark
+
+```
+ensemble 版   18 個合格，平均 +0.222 ± 0.010，最佳 +0.250（iter 350，2.7σ）
+fusion 版     18 個合格，平均 +0.241 ± 0.017，最佳 +0.277（iter 400，2.1σ）
+```
+
+評估基準確實變了（herding ATT 967.22 → 957.28、Gini 0.700 → 0.702），但代入計分公式
+只解釋約 **0.003**，所以 **+0.019** 的水位差是真的。
+
+**然而 10 seeds 的 benchmark 三個指標全部落在 1σ 內**——訓練分數（**單一固定需求 +
+貪婪解碼**）與報告指標（**10 seeds + beam-8**）測的不是同一件事。
+
+**最大值偏差重現**：兩次的最佳都比自己的平均高約 2σ。§13.21 的觀察不是偶然，
+**沿著訓練軌跡取最大值，本身就會偏樂觀。**
+
+#### ⑧ ⚠️ 一個必須寫進報告的限制
+
+**這是兩個單次訓練的 agent 在比。** 無法區分「fusion 沒有影響」與「PPO 的訓練變異
+蓋過了影響」——要分開得對每個來源各訓數個 seed。
+
+不過 §13.13 的結構論證（86% 路徑相同、按長度 14.1% 覆蓋率、四個獨立佐證）
+讓前者遠比後者可能。**報告應同時陳述證據與這個限制。**
+
+#### ⑨ 定案：報告採用 fusion 版的 agent
+
+數字等價，但它與報告聲稱的架構一致（「gated fusion → 決策層」）。
+ensemble 版（`drl_togo25_f10_800it.pt`）留作對照，證明換來源沒有改變結論。
+
+⚠️ **舊 checkpoint 現在與磁碟上的 `taichung_pred_edges.csv` 不匹配**。它的數字仍然有效
+（§13.21、§13.23），但要重現得先 `python make_drl_input.py`（預設 `--source ensemble`）。
+sidecar 會指出當下那份 CSV 的來源。
+
+---
+
 ## 14. 關鍵發現彙整
 
 ### 14.1 方法層面
@@ -2697,6 +2851,9 @@ beam search 買到的是**完整性**，不是品質。
 46. **重寫解碼器時，「等價於舊解碼器」的測試要比任何新結果先寫**：`beam_route` 重建了候選特徵、eq.4 成本、visited 集合、封閉遮罩與逐跳負載記帳，其中兩項寫錯而**完全不報錯**（§13.23 ②）。寬度 1 逐節點比對抓到了兩個：`to_go` 的夾值不一致、以及**失敗行程仍須記負載**。
 47. **失敗的嘗試也會改變環境**：`step()` 逐跳記負載，所以車子開 40 跳才卡住，那 40 條邊照樣被佔用——即使路徑被記成 `None`（§13.23 ②）。**「這次嘗試沒有成功」不等於「這次嘗試沒有留下痕跡」。**
 48. **公平性設計會讓數字互相牽動**：Gini 以「所有策略用過的邊」為參考集合，所以多加一列策略，**每一列的 Gini 都會微幅移動**（ATT 與 worst-ρ 不受影響，§13.23 ⑦）。**跨執行引用 Gini 前，先確認兩次的策略集合相同。**
+49. **★★ 一個「極小的標準差」可能是簡併，不是穩定**：①②③ 相對 ④ 的 ATT Δ 曾是 **±0.2%**，被讀成「四者的塌陷極度穩定」。其實那是 `0.2/0.8` 讓 hybrid 的路徑逐條等於 STGAT 的副產品；換成 fusion 打破簡併後，真實變異是 **±2.1%**（§13.24 ⑤）。**看到接近零的變異，先問是不是兩個東西根本是同一個。**
+50. **★★ 過了門檻就不再修正的分數，會系統性挑中門檻邊緣的候選**：score 的三項都只在已送達的車上計算，而 served 懲罰只在**低於**門檻時生效。結果是 served 95% 的 checkpoint 平均分數 +0.258、99% 的只有 +0.230（單調遞減），字典序因此必然選中卡在 95% 的那個（§13.24 ⑥）。**門檻只擋住一側時，最佳化會貼著門檻走。**
+51. **訓練分數與報告指標不是同一個量**：fusion 版的分數水位比 ensemble 版高 +0.019（真實，非基準變動造成），但 10 seeds 的 benchmark 三項全在 1σ 內（§13.24 ⑦）。前者是單一固定需求 + 貪婪解碼，後者是 10 seeds + beam-8。**用來選模型的量若與報告的量不同，兩者的排序就沒有義務一致。**
 28. **模型的隱含結構會限制環境能怎麼改**：S3 的封閉只能實作成「遮蔽」，因為 `edge_index` / `edge_static` 是 `register_buffer`、會進 `state_dict`，少 83 條邊就 shape mismatch（§13.17）。**動環境之前，先確認 checkpoint 對環境的哪些維度有硬綁定。** 附帶好處是遮蔽在物理上也比較正確——第一波車留在封閉路段的負載不會憑空消失。
 29. **「不可用」要用 `None` 表達，不要用 `inf`**：封閉邊若給 `inf`，Dijkstra 在沒有替代路徑時仍會回傳一條**穿過封閉道路**的路徑（成本無限大但仍是路徑），而下游沒有任何地方檢查成本，於是計為成功送達。`None` 才會拋 `NetworkXNoPath`（§13.17）。**用一個「很大的數」代替「不存在」，錯誤會沉默地往下游流。**
 30. **★ 重要性不能用流量來代理**：臺灣大道二段佔基準負載 6.32%，關掉只讓 ATT +4.7%；三段只佔 2.24%，卻造成 **+102.9%**（§13.17）。**要問的是「移除它之後替代路徑貴多少」，不是「它現在載了多少車」。** 與 §13.13「按長度的覆蓋率才是有效的那個」同型——都是用一個看似合理的代理量去排序而排錯。
@@ -2744,7 +2901,7 @@ DRL 在台中訓練            ← 不被卡（台中 loader 不讀 *_pred.npy�
 | 6 | **A3 遷移實驗（METR-LA → 台中 fine-tune）未做** | 目前只有 A1（METR-LA）與 A2（scratch） |
 | 7 | **26 個路段真實觀測率 < 60%** | 保留於資料集中；MAE 異常時優先查此處 |
 | 7b | **`train.py` 的 log 指標非最佳模型** | 已知並繞過（用評估工具重載 checkpoint）；未改原始碼 |
-| 8 | **台中 DRL** | ✅ **完成並收斂**。現行 checkpoint 為 `drl_togo25_f10_800it.pt`（`togo_refresh=25`，iter 350/800）。10 seeds、beam-8 解碼：S2 served 100.0%、S3 96.4%，兩情境的 ATT 與 worst-ρ 皆過計畫書門檻（§13.21、§13.23）|
+| 8 | **台中 DRL** | ✅ **完成並收斂**。**報告採用 `drl_fusion_togo25.pt`**（fusion 預測 + `togo_refresh=25`，iter 400/800）。10 seeds、beam-8：S2 served 99.9%、S3 96.0%，兩情境的 ATT 與 worst-ρ 皆過門檻。`drl_togo25_f10_800it.pt`（ensemble 預測）留作對照，數字等價（§13.21、§13.23、§13.24）|
 | 9 | **E-GAT 規模** | ✅ 已驗證可跑（1,224 節點 / 2,342 邊，無崩潰）。🔴 **但平均路徑 41.3 跳（METR-LA 僅 1.5 跳）是目前最大未知數**——PPO 的 credit assignment 鏈長近 30 倍 |
 | 10 | **實驗場域（arena）** | ✅ **已於新路網重建並再簡化**：840 節點 / 1,690 邊、場域內 416 條種子邊、覆蓋率 24.6%（按邊）/ 14.1%（按長度）、平均 28.7 跳。`capacity_scale = 0.0429`（§13.13）|
 | 11 | ~~集成權重待檢討~~ | 併入 #5 |
@@ -2755,12 +2912,12 @@ DRL 在台中訓練            ← 不被卡（台中 loader 不讀 *_pred.npy�
 | 16 | **舊 TDX 金鑰仍在 git 歷史** | 金鑰已改讀 `.env`，但建議至 TDX 後台 rotate |
 | 17 | **BPR 為 SUMO 的靜態替身** | 介面已預留，待江彥萱的 SUMO/TraCI（M3） |
 | 18 | **Gated Fusion** | ✅ **完成**（§13.22）。test：15 min 打平、60 min **−1.9% vs STGAT**。閘門 mean 0.8304、spread 0.035（路段）/0.052（時間）——**在動但幅度小**。⚠️ **改善主因是 STGCN 補 time-of-day，不是閘控**；val 的 2.52% 有一部分是「選 epoch」選出來的，test 只剩 1.9% |
-| 18b | ⚠️ **Fusion 刻意不接進決策層** | §13.13 證實 14.1%（按長度）覆蓋率下預測對路由無可測量影響（86% 路徑相同），接進去改變不了任何數字，只會多一個會漂移的設定。**Fusion 定位為軌道 A 的成果** |
+| 18b | ✅ **Fusion 已接進決策層**（§13.24） | `make_drl_input --source fusion`，並以新觀測重訓。**決策層數字未變**（三指標全在 1σ 內）——這正是接進去要證明的事，且讓報告的架構圖與數字來源一致。基準 ④ 的定義本就是「跟著 hybrid 預測走」，而 hybrid 現在是 gated fusion |
 | 18c | ⚠️ **STGCN 原始輸出可為負** | val −6.3、test −5.8 km/h。路由路徑有 clamp（`length/speed` 遇負會爆或變負），**masked 評估不 clamp**，故報告的 MAE 含這些不可能的值。兩邊都合理，但差異來源須知悉（§13.19） |
 | 19 | **氣候特徵（CWA）評估後決定不整合** | ✅ 已量化（§13.9）：0–5 mm/h 有 −2.4~−2.9% 效應但**非單調**，且效應量（0.66 km/h）遠小於模型 MAE（3.47 km/h）。報告須揭露此決策與依據，**不可寫成「無影響」** |
 | 20 | DRL 專案僅驗證 TSP20 | VRP / MDCVRP 子問題未執行 |
 | 21 | **202 節點版補值率 24.6%**（175 版為 23.7%） | ✅ 實測未造成傷害：相對 persistence 的技巧與 175 版相同（差異 <1%，§13.11 ③）。**絕對 MAE 的進步來自資料變容易，不可宣稱為模型改良** |
-| 22 | 🔴 **預測層對路由無可測量影響** | **兩個覆蓋率點的對照**（15.2% / 24.6%）結果零變化；86% 的路徑用 `t0` 與 `tpred` 完全相同。關鍵是**按長度**的覆蓋率恆為 14.1%——無預測的邊全部乘同一常數，均勻縮放不改變 Dijkstra 排序（§13.13）。**資料可得性的限制，非參數問題** |
+| 22 | 🔴 **預測層對路由無可測量影響** | **四個獨立佐證**：(a) 覆蓋率 15.2% → 24.6% 結果零變化；(b) 86% 的路徑用 `t0` 與 `tpred` 完全相同；(c) 換成 fusion（實質不同的預測，corr 0.985）②③④ 仍疊在一起；(d) **以 fusion 觀測重訓 agent，三個指標全在 1σ 內**（§13.24 ③）。關鍵是**按長度**的覆蓋率恆為 14.1%——無預測的邊全部乘同一常數，均勻縮放不改變 Dijkstra 排序（§13.13）。**資料可得性的限制，非參數問題** |
 | 22c | 🔴 **Gini 仍未達門檻** | **beam-8：S2 −9.9±0.8%、S3 −13.1±1.0%**，目標 −30%。**oracle 自己也只有 −17.9% / −16.6%**，故非 agent 學習不足。S3 已實測，**沒有救到 Gini 的絕對值**（oracle 反而略差），但 agent 捕捉到 oracle 改善量的比例由 55% 升至 **79%**（§13.23 ⑥）。剩餘方向：加大 `N_HOTSPOTS` |
 | 22f | ✅ **S3 完成**（10 seeds，§13.23 ③） | beam-8 下 served 96.4%±1.4，ATT −51.9±6.2%、Gini −13.1±1.0%、worst-ρ −26.8±5.0%。⚠️ 貪婪那列 served 僅 81.4%，**不可引用**——它看似打贏 oracle 純屬灌水 |
 | 25 | ✅ **HA 基準已完成**（計畫書 §4.6） | `ha_baseline.py`，三個時程的 persistence 交叉驗證全部 `+0.00%`。HA 4.0486 / 4.0489 / 4.0496，STGAT 領先 −16.5% / −13.2% / −10.4%（§13.18） |
@@ -2893,27 +3050,31 @@ python calibrate_taichung.py              # 容量校準掃描（車輛數改變
 cd ../STGAT && python run_infer_taichung.py --n-pred 3            # 印出 target row R
 cd ../STGCN && python run_infer_taichung.py --n-pred 3 --target-row R \
                       --checkpoint STGCN_taichung_p3.pt           # 同一時刻，否則拒絕
-cd ../integration && python make_drl_input.py
+cd ../integration
+python make_drl_input.py --source fusion    # ★ 現行：speed_hybrid 取自 gated fusion
+# python make_drl_input.py                  #   對照：0.2/0.8 固定權重集成
 
 # --- 訓練 ---
 python train_drl.py --graph taichung --iters 800 --train-vehicles 800 \
                     --eval-vehicles 800 --fail-mult 10.0 --togo-refresh 25 \
-                    --out checkpoints/taichung/drl_togo25_f10_800it.pt
+                    --out checkpoints/taichung/drl_fusion_togo25.pt
 
 # --- S2：尖峰漏斗（主情境）---
 python run_compare.py --graph taichung --vehicles 800 --repeat 10 \
-       --drl checkpoints/taichung/drl_togo25_f10_800it.pt --beam 8
+       --drl checkpoints/taichung/drl_fusion_togo25.pt --beam 8
 
 # --- S3：主幹道封閉（計畫書開篇的動機情境）---
 python run_compare.py --graph taichung --vehicles 800 --close-list   # 可關哪些路
 python run_compare.py --graph taichung --vehicles 800 --repeat 10 \
-       --drl checkpoints/taichung/drl_togo25_f10_800it.pt \
+       --drl checkpoints/taichung/drl_fusion_togo25.pt \
        --close-road 臺灣大道 --close-at 0.10 --beam 8
 
 # --- 診斷 ---
+# 三個 agent 必須在同一次執行裡比，否則共同子集不同（§13.21 ②）
 python diagnose_agent.py --drl checkpoints/taichung/drl_agent_f10_800it.pt \
-                         --drl checkpoints/taichung/drl_togo25_f10_800it.pt
-python test_beam.py --drl checkpoints/taichung/drl_togo25_f10_800it.pt \
+                         --drl checkpoints/taichung/drl_togo25_f10_800it.pt \
+                         --drl checkpoints/taichung/drl_fusion_togo25.pt
+python test_beam.py --drl checkpoints/taichung/drl_fusion_togo25.pt \
                     --vehicles 800 --widths 1,2,4,8
 
 # --- METR-LA 決策層（對照，100% 感測器覆蓋）---
@@ -2928,6 +3089,7 @@ python run_compare.py --repeat 10 --drl checkpoints/metr-la/drl_agent.pt
 | **多個 agent 必須在同一次 `diagnose_agent.py` 裡比** | 分開跑的共同子集不同，差異比要找的效果還大（§13.21 ②） |
 | `--togo-refresh` **不能只在評估時開** | 它改變觀測，由 `.meta.json` sidecar 強制一致（§13.16 ⑥） |
 | `--beam` 是**多加**一列，不是取代貪婪 | 兩列並排本身就是消融（§13.23） |
+| **checkpoint 與 `taichung_pred_edges.csv` 的來源必須一致** | `tpred` 進入 agent 的觀測，換來源就要重訓。`taichung_pred_edges.meta.json` 記著當下那份 CSV 的來源（§13.24 ①） |
 
 ### 16.6 氣候特徵評估（§13.9，結論為不整合）
 
@@ -3006,7 +3168,8 @@ python analyze_rain_speed.py
 |---|---|
 | `integration/checkpoints/metr-la/drl_agent.pt` | METR-LA agent（§11.3） |
 | `integration/checkpoints/taichung/drl_agent_f10_800it.pt` | 台中 agent，`togo_refresh=0`（§13.15 主表）。⚠️ **無 sidecar**（早於該機制） |
-| **`integration/checkpoints/taichung/drl_togo25_f10_800it.pt`** | **現行**：`togo_refresh=25`，iter 350/800（§13.21、§13.23） |
+| `integration/checkpoints/taichung/drl_togo25_f10_800it.pt` | `togo_refresh=25`，iter 350/800，**ensemble 預測**。留作對照（§13.21、§13.23） |
+| **`integration/checkpoints/taichung/drl_fusion_togo25.pt`** | **現行、報告採用**：`togo_refresh=25`，iter 400/800，**fusion 預測**（§13.24） |
 | **`fusion/checkpoints/fusion_c.pt`** | Gated Fusion，`--freeze none --stgcn-tod`，epoch 25/37（§13.22） |
 | `STGCN/STGCN_taichung_p{3,6,12}.pt` | 台中 STGCN，每個時程一個 |
 | `STGAT/experiment_taichung/best_model.pth` | 台中 STGAT，一個模型十二步 |
@@ -3072,15 +3235,21 @@ python analyze_rain_speed.py
 | HA | 4.0486 | 4.0489 | 4.0496 |
 | persistence | 4.2872 | 4.6744 | 5.1281 |
 
-**軌道 B（決策，10 seeds 配對 Δ vs 羊群基準，⑦ 為 beam-8）**
+**軌道 B（決策，10 seeds 配對 Δ vs 羊群基準，⑦ = `drl_fusion_togo25.pt` + beam-8）**
 
 | | S2 尖峰漏斗 | S3 主幹道封閉 |
 |---|---:|---:|
-| ⑦ served% | 100.0±0.0 | 96.4±1.4 |
-| **⑦ ATT** | **−35.7±7.4%** ✅ | **−51.9±6.2%** ✅ |
-| **⑦ worst-ρ** | **−24.7±2.1%** ✅ | **−26.8±5.0%** ✅ |
-| ⑦ Gini | −9.9±0.8% ❌ | −13.1±1.0% ❌ |
-| ⑥ oracle ATT / Gini / ρ | −44.5 / −17.9 / −41.9% | −60.7 / −16.6 / −43.3% |
-| ⑤ load-aware ATT / Gini / ρ | −43.4 / −3.2 / −36.2% | −59.9 / −7.3 / −35.6% |
+| ⑦ served% | 99.9±0.2 | 96.0±1.8 |
+| **⑦ ATT** | **−36.0±7.9%** ✅ | **−55.8±5.6%** ✅ |
+| **⑦ worst-ρ** | **−24.6±2.0%** ✅ | **−27.5±2.9%** ✅ |
+| ⑦ Gini | −10.1±0.6% ❌ | −12.9±0.8% ❌ |
+| ⑥ oracle ATT / Gini / ρ | −44.0 / −18.1 / −41.9% | −61.2 / −17.4 / −43.3% |
+| ⑤ load-aware ATT / Gini / ρ | −42.9 / −3.3 / −36.2% | −60.4 / −7.7 / −35.7% |
+
+> ⚠️ **一律引用 beam-8 的列。** 貪婪解碼在 S3 的 served 只有 82.8%，其 ATT Δ（−63.0%）
+> **看似打贏 oracle**，那是 17% 放棄率造成的灌水（§13.23 ④）。
+>
+> ⚠️ 以 ensemble 預測訓練的 `drl_togo25_f10_800it.pt` 數字等價（三指標全在 1σ 內，
+> §13.24 ③），可作為「換預測來源不改變結論」的對照。
 
 > 計畫書門檻：ATT ↓20–30% ✅、worst-ρ ↓20% ✅、Gini ↓30% ❌（oracle 亦未達）。
