@@ -786,6 +786,59 @@ Aug** — no `--seed` argument existed and the seeding lines were commented out,
 A3-b are therefore single unseeded draws, so 7-vs-23 looks well outside noise but cannot
 be claimed rigorously until the from-scratch run is repeated over several seeds.
 
+### Why the Gini target is not met, measured rather than argued
+
+Gini is the one proposal target the system misses: −10.1% (S2) and −12.9% (S3) against
+a −30% goal. The proposal also asked for a grid search over the eq. 4 weights
+(alpha, lambda1, lambda2) that had never been run. `integration/sweep_lambda.py` runs it
+against policy 6, the analytic optimiser of eq. 4 — if that cannot reach the target, the
+objective cannot.
+
+| lambda2 | ATT Δ | **Gini Δ** | worst-ρ Δ |
+|---:|---:|---:|---:|
+| 0.0 | **−45.4** | −4.7 | −41.6 |
+| 0.3 *(proposal default)* | −45.3 | −12.7 | −42.0 |
+| **0.8** *(what everything is reported at)* | −44.0 | **−14.5** | −41.9 |
+| 3.0 | −41.8 | −17.1 | −42.6 |
+| **12.0** | −39.5 | **−19.1** | −43.2 |
+
+At fifteen times the reported weight the optimum reaches −19.1%, and each doubling buys
+about 20% less than the last (ratio 0.81), so the series extrapolates to **−22.6%** —
+still seven points short. **The target is unreachable within eq. 4, and that is now
+measured.** Alpha is not swept and does not need to be: scaling (alpha, lambda1, lambda2)
+together scales the whole cost, which Dijkstra's argmin ignores, so only the ratios
+matter.
+
+The sweep also separates the two penalty terms cleanly. Without lambda2 the spread term
+is gone and Gini improves by only −4.7%; adding it at 0.8 takes it to −14.5%. Raising
+lambda1 from 0.5 to 2.0 moves worst-ρ by 4.4 points and Gini by 0.4. **lambda2 buys Gini,
+lambda1 buys worst-link saturation** — which is what eq. 4 has two terms for.
+
+#### The reason is topology, and the target does not transfer between graphs
+
+| policy 6 at lambda2 = 12 | out-degree | hops | baseline Gini | **Gini Δ reachable** |
+|---|---:|---:|---:|---:|
+| **METR-LA, hotspot** | **76.22** | 1.47 | 0.87 | **−50.7%** — target met |
+| **Taichung, hotspot** | **2.01** | 28.7 | 0.756 | **−19.1%** |
+| Taichung, random *(same graph, demand dispersed)* | 2.01 | 28.7 | 0.641 | −16.0% |
+
+**Changing the demand moves it 3 points. Changing the graph moves it 32.** Spreading load
+needs parallel alternatives: a Gaussian-kernel sensor graph offers 76 neighbours and
+1.5-hop trips, a real road network offers two exits and 28.7 hops. Dispersing the demand
+makes the *relative* figure worse, not better, because the baseline is already more even
+and there is less room to improve proportionally.
+
+So the honest statement is not "we missed the target". It is that **the −30% figure was
+calibrated on a dense similarity graph and does not carry to a real road network** — and
+the earlier explanation offered here, that the four hotspot hubs form an unavoidable
+bottleneck, does not hold either: those 16 in-edges carry 3.2% of all edge traversals,
+which pins worst-ρ's floor, and worst-ρ already meets its target.
+
+Retraining policy 7 at a higher lambda2 was considered and rejected on arithmetic, not
+instinct: it captures ~56% of policy 6's Gini improvement, so the 4.6-point gain would
+become ~2.6, still seventeen short, at the cost of invalidating every result downstream
+of it.
+
 ### Inference latency: the claim holds, the argument behind it does not
 
 The proposal (§5) promises "< 50 ms per single decision". Timing a `run_compare` rollout
