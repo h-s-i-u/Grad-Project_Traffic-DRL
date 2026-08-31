@@ -84,7 +84,7 @@ Both run through `python run_compare.py --graph {metr-la,taichung}`.
 | **`integration/`** | **The core of this project**: prediction → decision pipeline, routing policies, the PPO/E-GAT agent, and the evaluation harness. See its [README](integration/README.md). |
 | **`fusion/`** | **Gated Fusion (proposal §4.3)**: the dual-path model with the eq. 3 gate, plus the unified dataloader both backbones share. See its [README](fusion/README.md). |
 | **`TDX_Data/`** | Taichung traffic-data pipeline: fetch TDX → build network → build speed matrix → convert for both models. See its [README](TDX_Data/README.md). |
-| `Map/` | Taichung OSM road network (`Map_fined/` = the raw export from teammate A) + the simplified routing graph, speed matrix, mask and adjacency |
+| `Map/` | Taichung OSM road network (`Map_fined/` = the raw export from 黃少鯤) + the simplified routing graph, speed matrix, mask and adjacency |
 | `CWA/` | Central Weather Administration rainfall — evaluated, then **deliberately excluded**; see below |
 | `paper_work/` | Experimental design, development log, architecture diagram, written reports |
 | `*.pdf` | The three method papers + the project proposal — see Credits |
