@@ -48,6 +48,14 @@ python train_drl.py --graph taichung --iters 800 --train-vehicles 800 \
 python diagnose_agent.py --drl <ckpt-a> --drl <ckpt-b>   # several agents, ONE run
 python test_beam.py --drl <ckpt> --vehicles 800 --widths 1,2,4,8
 
+# --- inference latency (proposal section 5: < 50 ms per decision) ---
+# Run BOTH devices: the encoder is throughput-bound and the decoder is launch-bound,
+# so which device wins depends on how many times you decode per vehicle.
+python bench_latency.py --graph taichung --vehicles 800 \
+       --drl <ckpt> --beam 8 --verify --scale
+python bench_latency.py --graph taichung --vehicles 800 \
+       --drl <ckpt> --beam 8 --device cpu --scale
+
 # --- prediction-side baselines (no checkpoint, no GPU) ---
 python ha_baseline.py
 python search_ensemble_weight.py --n-pred 12 --split test
@@ -71,6 +79,7 @@ python search_ensemble_weight.py --n-pred 12 --split test
 | `calibrate_taichung.py` | find the (vehicles, capacity_scale) where congestion actually appears |
 | `diagnose_agent.py` | split the agent's ATT gap into detour / congestion / attrition |
 | `test_beam.py` | **beam width 1 must equal greedy** — run before trusting any beam number |
+| `bench_latency.py` | inference latency: per-hop / per-vehicle / per-fleet, decomposed by component, with the Dijkstra baselines in the same table. Installs its timers on the *instances*, so `policies.py` is untouched; `--verify` proves the timing loop still reproduces `policy_drl` |
 | `ha_baseline.py` | Historical-Average floor + anomaly-bucket breakdown (proposal §4.6) |
 | `search_ensemble_weight.py` | fixed-weight sweep + error correlation |
 | `taichung_pred_edges.csv` | per-edge speeds — what the router consumes (`.meta.json` records its source) |
@@ -263,6 +272,25 @@ claim, isolated about as cleanly as it can be.
   subsets — measured, two runs differed by 8 trips and static's ATT(common) moved 3.7%
   between them, which is larger than the effect being looked for.
 - **`--repeat` is the reporting mode.** Single-seed numbers are for quick checks only.
+- 🔴 **Quality and latency come from two different decodings, and both must be stated
+  together.** Beam-8 is the row to quote for ATT / Gini / worst-ρ, because greedy's
+  17.2% attrition under S3 inflates its ATT delta past the oracle's. But greedy is the
+  row that clears the proposal's 50 ms budget; beam-8 runs the decoder once per live
+  beam per hop — 261 calls per vehicle against 23 — and lands at 44–104 ms. Quoting
+  whichever is favourable in each table would be indefensible.
+- 🔴 **The Dijkstra baselines are 43–68x faster than the agent**, policy 6 included
+  (~0.31 ms per request, re-pricing amortised). Getting under 50 ms needs no learning.
+  Policy 6 is fast *and* better here because the arena's cost function is its own — BPR
+  plus eq.4 is what it optimises directly — so the agent's case rests on settings where
+  that cost is not analytic, which is what SUMO would supply and what is untested.
+- **Which device is faster depends on the decoding width, and on scale.** The encoder is
+  8.9x faster on GPU, the ≤3-candidate decoder 2.9x slower (pure kernel-launch
+  overhead); the crossover is ~68–74 decoder calls per vehicle, so greedy prefers GPU
+  and beam-8 prefers CPU by 2x. The GPU also has the worse tail (max 45.09 vs 30.66 ms),
+  which for a deadline matters more than its better mean. On the full 9,904-node network
+  the GPU's lead widens to 22x and it stops being optional — but there the binding cost
+  is `_compute_enc_ctx`, a per-node Python loop that is 57% of the per-vehicle fixed
+  cost against the model's 36%.
 
 See `../paper_work/實驗設計.md` for the full experimental design and
 `../paper_work/實驗記錄_DRL決策模組.md` for the development history.

@@ -133,3 +133,24 @@ Map/Map_fined/鄉(鎮、市、區)界線*/
 *.cpg
 *.CPG
 *.xlsx
+
+# =========================
+# Vendored upstream: reference copy only
+# =========================
+DRL-and-graph-neural-network-for-routing-problems/
+
+# =========================
+# Minimum inputs a clone needs to reproduce anything (432 KB total)
+# =========================
+# Everything above ignores *.csv / *.npy / *.pkl / *.json wholesale. These few files
+# are the difference between "a repository you can read" and "a repository you can
+# run": without them `run_compare.py` cannot build a graph at all.
+# Road-graph CSVs are an OpenStreetMap derived database -- ODbL, see NOTICE.md.
+!Map/arena_nodes_taichung.csv
+!Map/arena_edges_taichung.csv
+!Map/arena_meta.json
+!integration/taichung_pred_edges.csv
+!integration/taichung_pred_edges.meta.json
+!integration/data/adj_mx_dijsk.pkl
+!integration/stgcn_pred.npy
+!integration/stgat_pred.npy

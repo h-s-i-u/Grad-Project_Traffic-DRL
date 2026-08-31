@@ -1,4 +1,5 @@
 import os
+import random
 import time
 import util
 import torch
@@ -30,6 +31,19 @@ parser.add_argument('--opt', type=str, default='adam')
 parser.add_argument('--graph', type=str, default='default')
 parser.add_argument('--adjtype', type=str, default='symnadj')
 parser.add_argument('--early_stop_maxtry', type=int, default=20)
+parser.add_argument('--seed', type=int, default=42,
+                    help='fix the random draws (weight init, shuffling, dropout masks) '
+                         'so a run can be re-run and checked. Matches STGCN/main.py and '
+                         'fusion/train.py, which have always defaulted to 42. Pass a '
+                         'different value to measure run-to-run variance; there is no '
+                         'way to switch it off from the CLI on purpose -- an unseeded '
+                         'run is what left A1/A2/A3-b unreproducible.')
+parser.add_argument('--init-from', dest='init_from', type=str, default=None,
+                    help='A3-b (proposal section 5): fine-tune from a checkpoint that '
+                         'transfer_taichung.py has already reshaped for this road '
+                         'network, instead of starting from scratch. Nothing else about '
+                         'the run may differ from the from-scratch one being compared '
+                         'against.')
 parser.add_argument('--cuda', action='store_true', help='use CUDA training.')
 
 args = parser.parse_args()
@@ -48,9 +62,27 @@ def weight_schedule(epoch, max_val=10, mult=-5, max_epochs=100):
     return w
 
 def main():
-    #set seed
-    #torch.manual_seed(args.seed)
-    #np.random.seed(args.seed)
+    # Fix the random draws: weight init, the shuffling order, and the dropout masks
+    # (this model's dropout is 0.6, so that last one is not a detail). Until 08-31 the
+    # three lines below were commented out AND `--seed` did not exist, so every STGAT
+    # number in the record -- A1, A2, A3-b -- is a single unseeded draw, while
+    # STGCN/main.py and fusion/train.py have been seeded from the start.
+    #
+    # cudnn is set deterministic for the same reason STGCN does it: without it two runs
+    # of the SAME seed still differ on GPU, because cuDNN picks algorithms
+    # non-deterministically and `benchmark` re-tunes them per run. Costs ~10-30% speed;
+    # drop the two backend lines if that ever matters more than exact reproducibility.
+    if args.seed is not None:
+        os.environ['PYTHONHASHSEED'] = str(args.seed)
+        random.seed(args.seed)
+        np.random.seed(args.seed)
+        torch.manual_seed(args.seed)
+        torch.cuda.manual_seed_all(args.seed)
+        torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.deterministic = True
+        print(f'seeded with {args.seed} (cudnn deterministic)')
+    else:
+        print('WARNING: --seed none -- this run is NOT reproducible')
     #load data
     sensor_ids, sensor_id_to_ind, adj_mx = util.load_adj(args.adj_filename, args.adjtype)
     # adj_mx = adj_mx[0]
@@ -78,6 +110,13 @@ def main():
     print(args)
 
     net = STGAT(args.cuda, args.num_of_vertices, args.num_of_features, args.points_per_hour*args.num_of_hours, args.num_for_predict)
+    # A3-b: fine-tune from a checkpoint already reshaped for THIS road network by
+    # transfer_taichung.py. Plain strict load on purpose -- the cross-network shape
+    # logic lives in that script, so a mismatch here means the wrong file was passed.
+    if args.init_from:
+        net.load_state_dict(torch.load(args.init_from, map_location='cpu'))
+        print(f'fine-tuning from {args.init_from} (A3-b). Every other flag must match '
+              f'the from-scratch run, or this measures the flags and not the transfer.')
     if args.cuda:
         net = net.cuda()
     

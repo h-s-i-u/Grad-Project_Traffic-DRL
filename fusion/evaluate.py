@@ -79,8 +79,10 @@ def main():
     if os.path.isfile(meta_path):
         with open(meta_path, encoding="utf-8") as f:
             meta = json.load(f)
+        gate_desc = (f"BYPASSED ({meta['single_path']} only)" if meta.get("single_path")
+                     else ("extended" if meta.get("extended_gate") else "faithful"))
         print(f"  checkpoint: epoch {meta.get('epoch')}, freeze={meta.get('freeze')}, "
-              f"gate={'extended' if meta.get('extended_gate') else 'faithful'}, "
+              f"gate={gate_desc}, "
               f"val 12-step {meta.get('val_mae_12step', float('nan')):.4f}")
     else:
         print(f"  ⚠ no {os.path.basename(meta_path)} beside the checkpoint -- the model "
@@ -97,6 +99,11 @@ def main():
                           extended_gate=bool(meta.get("extended_gate", False)),
                           head_hidden=int(meta.get("head_hidden", 0)),
                           stgcn_channels=n_cn,
+                          # 🔴 Load-bearing. A single-path checkpoint still carries W1
+                          # and W3, so rebuilding with the default learned gate would
+                          # load_state_dict cleanly and then score a gate that was never
+                          # trained -- no error, and a perfectly plausible number.
+                          single_path=meta.get("single_path"),
                           cuda=cli.device.startswith("cuda")).to(cli.device)
     model.load_state_dict(torch.load(cli.checkpoint, map_location=cli.device))
     model.eval()
@@ -153,7 +160,14 @@ def main():
     per_sec = gate.mean(axis=0)
     print(f"  most STGCN-leaning section    idx {per_sec.argmin():>3}  gate {per_sec.min():.3f}")
     print(f"  most STGAT-leaning section    idx {per_sec.argmax():>3}  gate {per_sec.max():.3f}")
-    if max(gate.mean(axis=0).std(), gate.std(axis=0).mean()) < 0.02:
+    if meta.get("single_path"):
+        # Constant BY CONSTRUCTION here, so the collapse warning below would be a
+        # tautology -- and its second clause is measurably false for this run: a
+        # retrained single path does beat the constant-weight ensemble of the two
+        # UPSTREAM models, because that ensemble cannot retrain anything.
+        print(f"  (constant by construction: the gate is bypassed, "
+              f"{meta['single_path']} only)")
+    elif max(gate.mean(axis=0).std(), gate.std(axis=0).mean()) < 0.02:
         print("  ⚠ the gate is essentially constant. This model has reproduced a fixed "
               "weighted\n    average, so it cannot beat the constant-weight ensemble by "
               "anything but noise.")

@@ -81,7 +81,6 @@ Both run through `python run_compare.py --graph {metr-la,taichung}`.
 |---|---|
 | `STGAT/` | STGAT prediction model — cloned from [xyk0058/STGAT](https://github.com/xyk0058/STGAT) |
 | `STGCN/` | STGCN prediction model — cloned from [hazdzz/STGCN](https://github.com/hazdzz/STGCN) |
-| `DRL-and-graph-neural-network-for-routing-problems/` | Residual E-GAT / PPO routing base — cloned from [Lei-Kun/DRL-…-routing-problems](https://github.com/Lei-Kun/DRL-and-graph-neural-network-for-routing-problems) |
 | **`integration/`** | **The core of this project**: prediction → decision pipeline, routing policies, the PPO/E-GAT agent, and the evaluation harness. See its [README](integration/README.md). |
 | **`fusion/`** | **Gated Fusion (proposal §4.3)**: the dual-path model with the eq. 3 gate, plus the unified dataloader both backbones share. See its [README](fusion/README.md). |
 | **`TDX_Data/`** | Taichung traffic-data pipeline: fetch TDX → build network → build speed matrix → convert for both models. See its [README](TDX_Data/README.md). |
@@ -91,9 +90,18 @@ Both run through `python run_compare.py --graph {metr-la,taichung}`.
 | `*.pdf` | The three method papers + the project proposal — see Credits |
 | `requirements.txt` | Python dependencies (pip freeze of the `traffic_rl` env) |
 
-> `STGAT/`, `STGCN/` and `DRL-...` are upstream repositories with their own history; our
-> work concentrates in `integration/` and `TDX_Data/`, plus a small number of documented
-> fixes inside the model repos (see `paper_work/實驗記錄_DRL決策模組.md`).
+> `STGAT/` and `STGCN/` are **vendored upstream repositories** and keep their
+> own licences — see [`NOTICE.md`](NOTICE.md). Our work is in `integration/`, `fusion/`,
+> `TDX_Data/` and `CWA/`, plus these files, which sit inside the upstream directories
+> only because they import the upstream packages:
+>
+> | Ours, inside an upstream directory | What it does |
+> |---|---|
+> | `STGAT/evaluate_masked_taichung.py` · `STGCN/evaluate_masked.py` | masked evaluation (real observations only) + persistence baseline + PASS/FAIL verdict |
+> | `STGAT/run_infer_taichung.py` · `STGCN/run_infer_taichung.py` | single-row inference with a `.meta.json` sidecar, and `--dump-all` for full splits |
+> | `STGAT/transfer_taichung.py` | the A3 transfer experiment (no gradient step) |
+>
+> The three documented fixes we made *to* upstream files are listed in `NOTICE.md`.
 
 ---
 
@@ -101,6 +109,8 @@ Both run through `python run_compare.py --graph {metr-la,taichung}`.
 
 Python 3.10, CUDA 12.1. A GPU is needed to (re)train the models and the DRL agent; the
 routing comparison itself runs on CPU in ~1 s.
+
+[Data](https://drive.google.com/drive/folders/1m0iOxlsheqmTdWPemat-1QlAfaugG6lU?usp=sharing)
 
 ```bash
 conda create -n traffic_rl python=3.10
@@ -136,12 +146,29 @@ mv STGCN_taichung.pt STGCN_taichung_p3.pt      # main.py always writes STGCN_<da
 python evaluate_masked.py --dataset taichung --checkpoint STGCN_taichung_p3.pt
 
 # STGAT — emits 12 steps, so one model covers 15/30/60 min
-cd STGAT
+cd ../STGAT
 python train.py --cuda --data data/taichung/ \
     --adj_filename data/taichung/adj_mx_dijsk.pkl \
     --num_of_vertices 202 --params_dir experiment_taichung \
     --lr 3e-4 --epoch 500 --early_stop_maxtry 40
 python evaluate_masked_taichung.py
+
+# A3 transfer (proposal §5), which needs the from-scratch run above to compare against.
+# transfer_taichung.py takes NO gradient step. All four variants matter: --no-transfer
+# is the floor, and without it 8.76 reads as mediocre rather than worse than nothing.
+python transfer_taichung.py --node-init mean
+python transfer_taichung.py --node-init fresh --out-name init_fresh.pth
+python transfer_taichung.py --no-transfer     --out-name init_random.pth
+python transfer_taichung.py --node-init mean --recalibrate-bn 8192 --out-name init_bnrecal.pth
+python evaluate_masked_taichung.py --checkpoint transfer_experiment/init_model.pth
+
+# A3-b DOES train on the target. Every other flag must match the from-scratch run, and
+# --params_dir must not be experiment_taichung or it overwrites what it is compared to.
+python train.py --cuda --data data/taichung/ \
+    --adj_filename data/taichung/adj_mx_dijsk.pkl --num_of_vertices 202 \
+    --params_dir transfer_experiment \
+    --init-from transfer_experiment/init_model.pth \
+    --lr 3e-4 --epoch 500 --early_stop_maxtry 40
 ```
 
 > **Always report the masked numbers.** 24.6% of the Taichung cells are imputed and are
@@ -187,7 +214,19 @@ cd fusion
 python verify.py --device cpu                      # required: see below
 python train.py --freeze none --stgcn-tod                 --epochs 60 --batch 32 --patience 12                 --out checkpoints/fusion_c.pt
 python evaluate.py --checkpoint checkpoints/fusion_c.pt --split test --dump-all
+
+# ablation C₀ — the same command minus one flag
+python train.py --freeze none --epochs 60 --batch 32 --patience 12 \
+                --out checkpoints/fusion_c0.pt
+python evaluate.py --checkpoint checkpoints/fusion_c0.pt --split test   # no --dump-all
 ```
+
+**Never pass `--dump-all` for an ablation.** `evaluate.py` writes
+`integration/dump_fusion_<split>_p<N>.npz` under a fixed name that does not encode the
+checkpoint, and those three files are what `make_drl_input.py --source fusion` reads to
+build the decision layer's input. An ablation that dumps over them makes the reported
+10-seed routing results silently irreproducible. If an ablation's anomaly buckets are
+genuinely needed, back the three files up and verify the restore with `md5sum -c`.
 
 `verify.py` pushes the two already-trained backbones through the unified dataloader and
 checks they reproduce their recorded MAE. That dataloader rebuilds the windowing, both
@@ -208,6 +247,25 @@ persistence and comparing against the number `STGCN/evaluate_masked.py` reports;
 mismatch aborts rather than printing an incomparable score. Dump both models with
 `run_infer_taichung.py --dump-all --device cpu` to add their columns to the
 anomaly-bucket breakdown.
+
+### 7. Inference latency (proposal §5: "< 50 ms per decision")
+
+```bash
+cd integration
+python bench_latency.py --graph taichung --vehicles 800 \
+       --drl checkpoints/taichung/drl_fusion_togo25.pt --beam 8 --verify --scale
+python bench_latency.py --graph taichung --vehicles 800 \
+       --drl checkpoints/taichung/drl_fusion_togo25.pt --beam 8 --device cpu --scale
+```
+
+Run **both devices**. On a 1,690-edge graph the encoder is throughput-bound (GPU wins
+8.9x) while the decoder is kernel-launch-bound (CPU wins 2.9x), so the better device
+depends on how many times you decode per vehicle — the crossover is around 68–74 calls.
+Greedy does 23, beam-8 does 261.
+
+`policies.py` is not modified: the timers are installed on the env and agent
+*instances*. `--verify` re-runs the same demand through the untouched `policy_drl` and
+requires every path to match, because the timing loop is otherwise a copy of it.
 
 See [`integration/README.md`](integration/README.md) for the policy/metric details.
 
@@ -325,21 +383,85 @@ gain comes from.
 
 Bucketing by how far the input window ran from its weekly norm shows the actual source:
 
-| anomaly bucket | HA | STGCN | STGAT | fusion |
-|---|---:|---:|---:|---:|
-| Q1 most routine | 1.6674 | 1.7568 | 1.6015 | **1.5328** |
-| Q2 | 2.4533 | 2.5181 | 2.3105 | **2.2446** |
-| Q3 | 3.6379 | 3.6363 | 3.3363 | **3.2644** |
-| Q4 most unusual | 7.9150 | 7.2665 | **6.6047** | 6.6268 |
+| anomaly bucket | HA | STGCN | STGAT | fixed 0.2/0.8 | fusion C | **fusion C₀** |
+|---|---:|---:|---:|---:|---:|---:|
+| Q1 most routine | 1.6674 | 1.7568 | 1.6015 | 1.6044 | **1.5328** | 1.5419 |
+| Q2 | 2.4533 | 2.5181 | 2.3105 | 2.3100 | **2.2446** | 2.2521 |
+| Q3 | 3.6379 | 3.6363 | 3.3363 | 3.3293 | **3.2644** | 3.2707 |
+| Q4 most unusual | 7.9150 | 7.2665 | 6.6047 | **6.5875** | 6.6268 | 6.6067 |
 
 The improvement is concentrated at the **routine** end and vanishes at the anomalous one
 — the opposite of what a better gate would produce, and exactly what giving STGCN a
-time-of-day channel would produce. Which is the finding: the proposal assigns the STGCN
-path the *regular* component ("尖峰時段、星期週期"), but the shipped implementation feeds
-it speed alone, so it was losing to a plain historical average on the most routine cells
-and at weekday peak. **Half the proposal's dual-path premise did not hold until we gave
-that path an input the proposal itself asks for.** The other half — STGAT owning the
-anomalous end — held all along, and fusion cannot beat it there.
+time-of-day channel would produce. That reading was wrong, and the ablation that was
+written down to test it says so.
+
+#### The time-of-day channel contributes nothing
+
+`C₀` retrains with one flag removed (`--stgcn-tod`, i.e. the STGCN path drops back to
+speed alone) and everything else — freeze mode, gate type, loss, lr, decay, batch, seed
+— identical. The criterion was fixed in advance against the 1% noise floor that §13.7's
+fixed-weight ceiling defines: land near 3.61 and the attribution holds, land near 3.56
+and it does not.
+
+| | C₀ (no tod) | C (tod) | C − C₀ |
+|---|---:|---:|---:|
+| test 15 / 30 / 60 min | 3.3932 / 3.4825 / **3.5590** | 3.3786 / 3.4799 / **3.5579** | 0.43% / 0.07% / 0.03% |
+| val 12-step | 3.1423 | 3.1391 | 0.10% |
+
+Six of seven comparisons land under 0.2%, and the whole −1.9% survives without the
+channel. The bucket table above settles it: of Q1's 4.29pp gain over STGAT, the channel
+accounts for 0.57pp — **13%** — and at **weekday peak**, the one period where a
+time-of-day feature is by construction most informative, **C₀ is 0.45% better than C.**
+Both sit inside the noise floor, but there is no cell anywhere in which the signal
+points the way the attribution predicted.
+
+The mechanism was predictable from the gate. It sits at **0.78–0.83**, so the fused
+output is roughly four-fifths STGAT and one-fifth STGCN; improving the input of a path
+that carries 20% of the weight cannot move the result. That is the same fact §13.7
+measured as a best fixed weight of 0.2/0.8, arrived at from the other direction.
+"The effect concentrates in X-shaped samples" does not license "X's feature caused it" —
+the bucket *shape* is inherited from STGAT, which had the channel all along.
+
+What survives unchanged is the measurement underneath: STGCN **on its own**, without a
+time-of-day channel, loses to a plain historical average on the most routine cells and
+at weekday peak, while the proposal assigns it exactly the *regular* component
+("尖峰時段、星期週期"). So half the dual-path premise does not hold as shipped. What no
+longer follows is that adding the channel is what fixes it. The honest statement is that
+we implemented the input the proposal asks for and measured it to contribute nothing.
+
+#### Neither does the second path, or the gate
+
+`--single-path stgat` bypasses the gate and sends one path to the head, leaving the
+dataloader, normalisation, loss, head and horizon count untouched. (Written as
+`tanh(W2·t)` rather than pinning the gate to 1 — a pinned gate still carries W3's *bias*,
+so the discarded path would keep contributing a learned constant.)
+
+| 60 min MAE | | vs the row above | what that row adds |
+|---|---:|---:|---|
+| STGAT, trained on its own | 3.6276 | — | — |
+| **STGAT alone through fusion's training regime** | **3.5557** | **−2.0%** | **the training regime** |
+| + second path + learned gate (C₀) | 3.5590 | +0.09% | **dual path + gate** |
+| + time-of-day into STGCN (C) | 3.5579 | −0.03% | **time-of-day** |
+
+One path, no gate, and it matches the full dual-path model at every horizon — at 60 min
+it is 0.06% *ahead*. **All three components of the proposal's §4.3 measure zero. The
+entire 1.9–2.0% is the training regime** (masked MAE, fusion's head, its early-stopping
+criterion), which has nothing to do with eq. 3.
+
+This was foreseeable from a number measured three weeks earlier and not followed
+through: the two models' errors correlate at **0.934**, and the best fixed blend of them
+beats STGAT alone by 0.43%. Models that are wrong in the same places cannot be rescued
+by any rule for combining them, and a learned gate is just a rule for combining them —
+which is why it converged on 0.78–0.83, the same 0.2/0.8 the weight search had already
+found. **This is a property of the data, not a defect in the implementation.**
+
+The reported model stays C: it is what §4.3 asks for, and it is what feeds the decision
+layer. What changes is the claim. Not "gated fusion cut 60-min MAE by 1.9%", but
+**"we implemented §4.3's gated fusion and three ablations show none of its components
+contributes measurably"** — with the error correlation as the reason. The remaining 2.0%
+is not decomposed further: the baseline STGAT was trained by a different person with a
+different loss and stopping rule, so the honest scope is "this regime beats that one",
+and going deeper is prediction-module tuning rather than an architectural claim.
 
 ### Decision (Taichung arena, 800 vehicles, 10 demand draws)
 
@@ -592,6 +714,151 @@ would report the arena's own pruning as a consequence of the incident — and wo
 policy 7 under the 95% served threshold for an unrelated reason. They are dropped from
 every policy alike, and the count is printed.
 
+### Transfer, METR-LA → Taichung: the architecture is inductive, the transfer is not
+
+The proposal (§5) expects the METR-LA model to run zero-shot on Taichung and to reach a
+usable level after a few fine-tuning epochs. `STGAT/transfer_taichung.py` tests the first
+half on its own: it builds a Taichung-shaped STGAT, copies across whatever survives the
+change of road network, and writes the result out without taking a single gradient step.
+
+**95.6% of the parameters transfer by shape** — 298 of 332 tensors, 5,153,952 weights:
+the gated temporal convolutions, the GAT's shared W / a1 / a2, downsample, EndConv. The
+other 34 tensors are bound to the node count (18 per-node GAT biases, 16 BatchNorms over
+the node axis). So the architecture really is inductive; what blocks the transfer is 4.4%
+of the parameters and an implementation choice, not the method.
+
+Supplying that 4.4% three different ways does not rescue it:
+
+| MAE, real observations only | 15 min | 30 min | 60 min | 12-step mean |
+|---|---:|---:|---:|---:|
+| **random init — nothing transferred** | **7.3684** | **7.3679** | **7.5950** | **8.0661** |
+| transfer + source's mean node | 8.7621 | 10.3458 | 11.2600 | 10.6411 |
+| transfer + BatchNorm recalibrated on target | 23.3704 | 42.4420 | 27.3279 | 69.5339 |
+| transfer + fresh node stats | 56.0498 | 70.0450 | 71.8151 | 90.5810 |
+| persistence | 4.2852 | 4.6712 | 5.1233 | 4.7328 |
+| trained from scratch (A2) | 3.3802 | 3.5127 | 3.6276 | — |
+
+**The best of the four is the one that transfers nothing.** That is not a sign of a bug —
+a random network emits something close to a constant, so its MAE is roughly the mean
+absolute deviation and it is *safe*, because it says nothing. A transferred network says
+something structured and wrong, which is easily worse. The conclusion is therefore that
+the transferred representation is **actively misaligned** on the target network, not that
+it is uninformative.
+
+Three checks were run before drawing that conclusion: the source checkpoint is healthy
+(no NaN, sane norms), the two datasets' feature channels mean the same thing (channel 1
+is time-of-day in [0,1] in both), and the z-score touches only channel 0, per dataset —
+so both channels arrive at the model on the same scale. A predicted explanation for the
+failure — that the node-bound BatchNorm statistics were the blocker — was tested by
+recalibrating them on Taichung with no gradient step, and it made things four times
+*worse*, so that hypothesis is dead.
+
+Scope, which the report has to state: this is STGAT only, since STGCN's spectral
+convolution is tied to a fixed Laplacian and is transductive by construction; and
+"zero-shot" here means no gradient step, not no target data at all — the z-score
+statistics come from Taichung's own train split, because the two cities are in different
+units.
+
+#### Fine-tuning from it does work, which is the other half of the claim
+
+| | best epoch | epochs run | wall clock | 15 min | 30 min | 60 min |
+|---|---:|---:|---:|---:|---:|---:|
+| from scratch (A2) | **23** | 64 | 4024.6 s | **3.3802** | **3.5127** | **3.6276** |
+| **fine-tuned from the transfer** | **7** | 47 | 3941.9 s | 3.4137 | 3.5304 | 3.6510 |
+
+Final quality is within the 1% threshold at all three horizons (+0.50 to +0.99%, all
+slightly worse), and the best epoch arrives in **7 rather than 23**. The proposal says
+"usable after fine-tuning for a few epochs" — seven is a few. **So §5's first clause
+fails and its second holds.**
+
+The two results are not in tension once stated properly: the same initialisation is a
+*bad predictor* and a *good starting point*. Its weights compute the wrong function, yet
+they sit in a region of parameter space from which the target task is quickly reachable.
+"Can it be used directly" and "is it easy to learn from" are different questions, and
+the proposal wrote them as two halves of one sentence.
+
+Three caveats. "Faster" means epochs, not wall clock — with patience-40 early stopping
+both runs cost about the same total time, so the saving only materialises if you stop at
+the plateau. The pretrained run converges sooner but to a *slightly* worse plateau, which
+is the usual shape. And most importantly: **`STGAT/train.py` had no seed at all until 31
+Aug** — no `--seed` argument existed and the seeding lines were commented out, while
+`STGCN/main.py` and `fusion/train.py` have defaulted to 42 from the start. A1, A2 and
+A3-b are therefore single unseeded draws, so 7-vs-23 looks well outside noise but cannot
+be claimed rigorously until the from-scratch run is repeated over several seeds.
+
+### Inference latency: the claim holds, the argument behind it does not
+
+The proposal (§5) promises "< 50 ms per single decision". Timing a `run_compare` rollout
+and dividing by the vehicle count does not measure that — it mixes a per-vehicle graph
+encode with a per-hop decode, and the hop count is itself a variable (32.8 hops in S2,
+40.3 in S3, 79 at worst). `bench_latency.py` decomposes it and reports what one **routing
+request** costs, end to end, state preparation included.
+
+| one vehicle's route, ms | GPU / S2 | GPU / S3 | CPU / S2 | CPU / S3 |
+|---|---:|---:|---:|---:|
+| **policy 7, greedy** | **13.87** | **13.76** | 21.50 | 22.13 |
+| under 50 ms | ✅ **100%** | ✅ **100%** | ✅ **100%** | ✅ **100%** |
+| policy 7, beam-8 | 90.02 | 103.89 | 43.95 | 51.24 |
+| under 50 ms | ❌ 22.5% | ❌ 22.2% | ❌ 67.1% | ❌ 52.5% |
+| 1 / 4, one Dijkstra request | ~0.29 | ~0.29 | ~0.28 | ~0.30 |
+| **6 oracle, one request** | **~0.31** | **~0.32** | **~0.31** | **~0.33** |
+
+Greedy passes on every one of 2,668 vehicles, on both devices, in both scenarios — not
+just on average. **Three things follow, and two of them are uncomfortable.**
+
+**Beam-8 fails, and beam-8 is the row we quote for quality.** The decoder runs once per
+live beam per hop: 261 calls per vehicle against greedy's 23. The quality numbers and
+the latency number therefore come from two different settings, and the report has to say
+so in the same breath rather than quoting whichever is favourable. There is an
+unimplemented fix — batching the 8 beams into one forward would cut the GPU figure to an
+estimated ~35 ms.
+
+**The oracle is 43–68x faster and better on all three metrics.** That retires the
+argument, made earlier in this project, that policy 7 trades coordination quality for
+responsiveness. It does not: getting under 50 ms needs no learning at all. Policy 6 wins
+here because **the arena's cost function is its own** — BPR plus eq.4 is exactly what it
+optimises directly, so it is the answer rather than an approximation of it. Policy 7's
+case rests on settings where that cost is not available in closed form, which is what
+SUMO would provide and what has not been tested. What can be claimed today is that it
+learns **56% (S2) / 74% (S3)** of the oracle's Gini improvement from reward alone.
+
+**Which device is faster depends on the decoding width, not on the model.** The encoder
+(1,690 edges, 3 GATv2 layers) is 8.9x faster on GPU; the decoder (≤3 candidates) is 2.9x
+*slower*, being pure kernel-launch overhead. Crossover: ~68–74 decoder calls per vehicle.
+And the GPU's mean is better while its tail is worse — max 45.09 ms against the CPU's
+30.66 ms, leaving under 10% headroom. **For a deadline, the CPU is the safer device**,
+which is the opposite of the usual instinct.
+
+#### At full-network scale the bottleneck is state preparation, not the model
+
+The E-GAT weights carry no node count, so the same checkpoint loads onto the full
+9,904-node / 27,022-edge network. Timing the forward there (routing quality at that
+scale is untested and not claimed):
+
+| 840 → 9,904 nodes (×11.8), medians | GPU | CPU |
+|---|---|---|
+| **encoder (E-GAT)** | 4.209 → **7.686** ms | 8.527 → **170.160** ms |
+| `_compute_enc_ctx` (Python loop) | 0.751 → 11.948 ms | 1.155 → 11.910 ms |
+| to-go Dijkstra | 2.082 → 36.782 ms | 2.995 → 36.430 ms |
+| 1 static Dijkstra | 0.519 → **6.329** ms | 0.751 → **7.074** ms |
+
+**The GPU's lead over the CPU widens from 8.9x to 22.1x** — 1,690 edges never saturate
+it, 27,022 begin to. Of the 21.1 ms a vehicle costs before its first hop on the full
+network, **64% is state preparation** (the per-node Python loop plus the Dijkstra) and
+only 36% is the model. Vectorising `_compute_enc_ctx` is what buys headroom at scale;
+a smaller model would not. On CPU the same fixed cost is 183.6 ms, so at full scale the
+GPU stops being merely faster and becomes required — the device choice flips with
+network size as well as with decoding width.
+
+A Dijkstra request on the full network still costs only 6–7 ms, so §2.1's premise is not
+rescued by scale either.
+
+*Caveat on the ratios:* the same encoder measures 1.786 ms (GPU) in the 800-vehicle
+rollout and 4.209 ms in the scale block, with the CPU moving the other way (15.884 →
+8.527) — clock states differ between a 30-vehicle and an 800-vehicle run. Ratios are
+taken within one block, and the two claims above survive either denominator. The claim
+that does not survive, and is therefore not made, is "the encoder scales worst on CPU".
+
 ### Climate features: evaluated, then excluded
 
 The proposal (§4.2/§4.3) plans to inject CWA rainfall. `CWA/analyze_rain_speed.py`
@@ -615,11 +882,24 @@ disclosed with its numbers. It is not correct to say rainfall has no effect.
 - [x] HA (Historical Average) baseline — proposal §4.6, with a persistence cross-check
       confirming window alignment to four decimals
 - [x] **Gated Fusion (proposal eq. 3)** — joint dual-path training, one model emitting
-      15/30/60 min. Beats STGAT by 1.9% at 60 min, level at 15
+      15/30/60 min. 1.9% ahead of the separately-trained STGAT at 60 min, level at 15 —
+      but see the ablations: none of that comes from the architecture
 - [x] Rainfall evaluated and, with evidence, excluded
-- [ ] Ablation: rerun fusion without the time-of-day channel, to separate its
-      contribution from the gate's
-- [ ] A3 transfer experiment (METR-LA pretrain → Taichung fine-tune) — proposal §5
+- [x] Ablation: fusion without the time-of-day channel — **it contributes nothing**
+      (0.03–0.43%), refuting the attribution that had been inferred from the bucket table
+- [x] C₀'s anomaly buckets — the channel accounts for 13% of the Q1 gain, and at
+      weekday peak removing it is *better*
+- [x] Control: STGAT alone through fusion's dataloader/head/loss — **it reaches −2.0% by
+      itself**, so the dual path and the gate contribute nothing. All three components
+      of proposal §4.3 measure zero; the gain is the training regime
+- [x] **A3-a: zero-shot transfer, METR-LA → Taichung** (proposal §5) — **it does not hold.**
+      95.6% of the weights transfer by shape, but no way of supplying the remaining 4.4%
+      beats a randomly initialised network, and all of them lose badly to persistence
+- [x] **A3-b: fine-tune from the transferred weights — it does hold.** Best epoch 7
+      against 23 from scratch, final MAE within 1% at every horizon
+- [ ] Run the from-scratch STGAT over several seeds, to establish how much best-epoch
+      varies naturally — `--seed` only exists as of 31 Aug, so 7-vs-23 is still two
+      single unseeded runs
 
 **Decision (Track B)**
 
@@ -634,6 +914,13 @@ disclosed with its numbers. It is not correct to say rainfall has no effect.
 - [x] **Arterial-closure scenario S3**, 10 seeds — the proposal's motivating case
 - [x] **Beam-search decoding**, with a width-1 equivalence test against greedy
 - [x] **Policy 7 fully comparable in both scenarios** (served 100% / 96.4%)
+- [x] **Inference latency measured** (proposal §5) — greedy clears 50 ms on 100% of
+      2,668 vehicles, on both devices. Beam-8 does not, and the Dijkstra baselines are
+      43–68x faster than either
+- [ ] Batch the 8 beams into one decoder forward — would put beam-8 back under 50 ms
+      (estimated ~35 ms) and remove the quality/latency conflict
+- [ ] Vectorise `_compute_enc_ctx`: a per-node Python loop, now a third of the GPU
+      per-vehicle model cost
 - [ ] Widen the hotspot funnel (`N_HOTSPOTS`) — the last untried lever on Gini
 - [ ] `tpred_fallback` sensitivity: `free_flow` vs `network_mean`, both reported
 - [ ] One-horizon vs three-horizon agent ablation (now feasible: fusion emits all three)
@@ -650,7 +937,13 @@ Detailed design and history: [`paper_work/實驗設計.md`](paper_work/實驗設
 
 ## Team
 
-東海大學 畢業專題 — **S12350312 黃子修 · S12350302 黃少鯤 · S12350131 江彥萱**
+東海大學 (Tunghai University) graduate project.
+
+| Member | Responsible for |
+|---|---|
+| **黃子修** | Prediction models (`STGCN/`, `STGAT/`, `fusion/`), the TDX processing chain and routing arena (`TDX_Data/`), and the decision layer (`integration/`) — everything documented in this README |
+| **黃少鯤** | Taichung OSM road-network export (`Map/Capture_Road_Node.py`, `Map/Map_fined/`) and TDX data collection (`TDX_Data/fetch_tdx_section_*.py`) |
+| **江彥萱** | SUMO microscopic simulation and TraCI integration (in progress) |
 
 ## Credits & references
 
@@ -661,8 +954,19 @@ included in this folder as PDFs.
 |---|---|---|
 | STGCN prediction | [hazdzz/STGCN](https://github.com/hazdzz/STGCN) | Yu, Yin & Zhu — *Spatio-Temporal Graph Convolutional Networks: A Deep Learning Framework for Traffic Forecasting*, IJCAI 2018 |
 | STGAT prediction | [xyk0058/STGAT](https://github.com/xyk0058/STGAT) | Kong et al. — *STGAT: Spatial-Temporal Graph Attention Networks for Traffic Flow Forecasting*, IEEE Access 2020 |
-| DRL routing | [Lei-Kun/DRL-and-graph-neural-network-for-routing-problems](https://github.com/Lei-Kun/DRL-and-graph-neural-network-for-routing-problems) | Lei et al. — *Solve routing problems with a residual edge-graph attention neural network*, Neurocomputing 2022 |
+| DRL routing | [Lei-Kun/DRL-and-graph-neural-network-for-routing-problems](https://github.com/Lei-Kun/DRL-and-graph-neural-network-for-routing-problems) — **re-implemented, not vendored** | Lei et al. — *Solve routing problems with a residual edge-graph attention neural network*, Neurocomputing 2022 |
 
-Traffic data from **TDX (Transport Data eXchange)**, road network from
-**OpenStreetMap** via OSMnx. Additional methods referenced: Schulman et al. 2017 (PPO) ·
-Wardrop 1952 (User-Equilibrium vs System-Optimum) · Lopez et al. 2018 (SUMO).
+Additional methods referenced: Schulman et al. 2017 (PPO) · Wardrop 1952
+(User-Equilibrium vs System-Optimum) · Lopez et al. 2018 (SUMO).
+
+## Licensing
+
+Our own code is **MIT** ([`LICENSE`](LICENSE)). The vendored upstream directories keep
+their own terms and are **not** covered by it — `STGCN/` is LGPL-2.1, and **`STGAT/` upstream ships no licence file at all**. The datasets carry
+their providers' terms. [`NOTICE.md`](NOTICE.md) has the per-directory breakdown, which
+files inside the upstream repos we changed, and what to do if you want to reuse any of it.
+
+> Road network © **OpenStreetMap** contributors, under the **Open Database Licence
+> (ODbL) 1.0** — the derived road-graph CSVs in `Map/` are an ODbL derived database.
+> Traffic speed data 資料來源：**交通部運輸資料流通服務平臺（TDX）**.
+> Rainfall data 資料來源：**中央氣象署**.

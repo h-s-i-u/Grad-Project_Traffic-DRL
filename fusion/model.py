@@ -38,11 +38,30 @@ from paths import STGCNPath, STGATPath
 
 
 class GatedFusion(nn.Module):
-    """eq. 3, plus the FC head. Operates on [B, N, C] from each path."""
+    """eq. 3, plus the FC head. Operates on [B, N, C] from each path.
+
+    `single_path` is the control for "what does the SECOND path plus the gate actually
+    buy?". With it set, the gate is bypassed and only the named path reaches the head;
+    everything else -- dataloader, normalisation, loss, head, horizon count -- stays
+    identical, so the difference against the dual-path run is attributable to the second
+    path and the gate alone. The question is live because the learned gate settles
+    around 0.78-0.83, i.e. the fused output is roughly four-fifths STGAT, while the best
+    FIXED blend beats STGAT by only 0.40% (實驗記錄 §13.7, §13.22 ⑥c).
+
+    W1 and W3 are still constructed when a single path is selected. They receive no
+    gradient and are unused, but keeping them leaves the state-dict keys identical to a
+    dual-path run, so existing checkpoints keep loading.
+    """
+
+    SINGLE = (None, "stgcn", "stgat")
 
     def __init__(self, stgcn_dim, stgat_dim, n_vertex, hidden=64, n_pred=12,
-                 extended_gate=False, node_emb=8, head_hidden=0):
+                 extended_gate=False, node_emb=8, head_hidden=0, single_path=None):
         super().__init__()
+        if single_path not in self.SINGLE:
+            raise ValueError(f"single_path must be one of {self.SINGLE}, "
+                             f"got {single_path!r}")
+        self.single = single_path
         self.proj_cn = nn.Linear(stgcn_dim, hidden)
         self.proj_at = (nn.Identity() if stgat_dim == hidden
                         else nn.Linear(stgat_dim, hidden))
@@ -60,6 +79,12 @@ class GatedFusion(nn.Module):
         """s [B,N,Ds], t [B,N,Dt] -> [B, N, n_pred] in per-section z-score."""
         s = self.proj_cn(s)
         t = self.proj_at(t)
+        if self.single:
+            # Written as tanh(W2 t) rather than pinning gate=1, because with gate=1 the
+            # sum still carries W3's BIAS -- the discarded path would go on contributing
+            # a learned constant and the control would not be clean.
+            h = torch.tanh(self.W2(t) if self.single == "stgat" else self.W3(s))
+            return self.head(h)
         if self.extended:
             b, n, _ = s.shape
             emb = self.node_emb.weight.unsqueeze(0).expand(b, -1, -1)
@@ -78,6 +103,12 @@ class GatedFusion(nn.Module):
         A gate that never moves means the model settled on a fixed blend and the whole
         exercise reduces to the constant weight 實驗記錄 §13.7 already measured.
         """
+        if self.single:
+            # There is no gate in this mode. Returning the constant keeps evaluate.py's
+            # gate line honest -- computing W1 on weights that were never trained as a
+            # gate would print a perfectly plausible number that means nothing.
+            return torch.full(s.shape[:2], 1.0 if self.single == "stgat" else 0.0,
+                              device=s.device)
         with torch.no_grad():
             s2, t2 = self.proj_cn(s), self.proj_at(t)
             if self.extended:
@@ -117,15 +148,20 @@ class DualPathModel(nn.Module):
 
     def __init__(self, gso, adj, n_vertex, n_pred=12, hidden=64, freeze="none",
                  extended_gate=False, head_hidden=0, cuda=False, n_his=12,
-                 stgcn_channels=1):
+                 stgcn_channels=1, single_path=None):
         super().__init__()
         if freeze not in self.FREEZE:
             raise ValueError(f"freeze must be one of {self.FREEZE}, got {freeze!r}")
         self.stgcn = STGCNPath(gso, n_vertex, n_his=n_his, in_channels=stgcn_channels)
         self.stgat = STGATPath(adj, n_vertex, n_his=n_his, cuda=cuda)
+        # The discarded path still runs under `single_path`. It receives no gradient, so
+        # it stays at initialisation and only costs time -- but its dropout keeps drawing
+        # from the same RNG stream, which is what makes the control comparable to the
+        # dual-path runs batch for batch rather than merely on average.
         self.fusion = GatedFusion(self.stgcn.out_dim, self.stgat.out_dim, n_vertex,
                                   hidden=hidden, n_pred=n_pred,
-                                  extended_gate=extended_gate, head_hidden=head_hidden)
+                                  extended_gate=extended_gate, head_hidden=head_hidden,
+                                  single_path=single_path)
         self.freeze = freeze
         for name in self.frozen_paths():
             for p in getattr(self, name).parameters():

@@ -136,6 +136,44 @@ python train.py --freeze none --extended-gate --out checkpoints/fusion_ext.pt
 python evaluate.py --checkpoint checkpoints/fusion_joint.pt --split test --dump-all
 ```
 
+**Reported configuration** is `--freeze none --stgcn-tod` (checkpoint `fusion_c.pt`).
+Two controls strip it back, one component at a time:
+
+```bash
+# C₀ — the same command minus the time-of-day channel
+python train.py --freeze none --epochs 60 --batch 32 --patience 12 \
+                --out checkpoints/fusion_c0.pt
+python evaluate.py --checkpoint checkpoints/fusion_c0.pt --split test   # NOT --dump-all
+
+# E — gate bypassed, one path only
+python train.py --freeze none --single-path stgat \
+                --epochs 60 --batch 32 --patience 12 \
+                --out checkpoints/fusion_e.pt
+python evaluate.py --checkpoint checkpoints/fusion_e.pt --split test    # NOT --dump-all
+```
+
+| 60 min MAE (test) | | what the row adds |
+|---|---:|---|
+| STGAT, trained on its own | 3.6276 | — |
+| **E** — one path, no gate | **3.5557** | the training regime |
+| **C₀** — + second path + gate | 3.5590 | dual path + gate |
+| **C** — + time-of-day (reported) | 3.5579 | time-of-day |
+
+**Every component of eq. 3 measures zero**; the whole 2.0% is the training regime. The
+ceiling was visible from the start — the two models' errors correlate at 0.934 — and a
+gate is only a rule for combining them. `--single-path` records itself in the meta and
+`evaluate.py` reads it back: a single-path checkpoint still carries W1 and W3, so a
+default rebuild would load cleanly and then score a gate that was never trained.
+
+> 🔴 **`--dump-all` overwrites the decision layer's input.** The dump name
+> `integration/dump_fusion_<split>_p<N>.npz` does not encode which checkpoint produced
+> it, and `integration/make_drl_input.py --source fusion` reads exactly those three
+> files to build the graph the DRL agent was trained against. An ablation that dumps
+> over them makes the reported 10-seed routing results silently irreproducible — no
+> error, just different numbers. Only the reported checkpoint should ever dump. If an
+> ablation's anomaly buckets are needed, back the three files up first and verify the
+> restore with `md5sum -c`.
+
 ---
 
 ## Deviations from the proposal (state these in the report)
@@ -146,6 +184,7 @@ python evaluate.py --checkpoint checkpoints/fusion_joint.pt --split test --dump-
 | Loss | L2 (MSE) | **masked MAE** by default (`--loss mse` restores it) | MAE is what every number in 實驗記錄 is reported in; optimising a different quantity than the one reported lets the two diverge quietly |
 | Masking | not specified | **external `mask.npy`** | 24.6% of cells are imputed and scoring on them is nearly free. METR-LA's `null_val=0.0` mechanism does **not** transfer — imputed cells hold real numbers, so there is no sentinel to test for (實驗設計 §2.3) |
 | Per-path normalisation | not specified | **each path keeps its own** | Unifying it invalidates the pretrained weights and makes warm-starting impossible |
+| Time-of-day into the STGCN path | implied — §4.3 assigns that path "尖峰時段、星期週期" | **added** (`--stgcn-tod`), and **measured to contribute nothing** | The shipped STGCN feeds on speed alone, which cannot express what the proposal asks that path to extract. Adding it is faithful to §4.3, but ablation C₀ puts its contribution at 0.03–0.43% on test and 0.06–0.18% on val — under the 1% noise floor. The −1.9% at 60 min comes from end-to-end joint training instead (實驗記錄 §13.22 ⑥) |
 
 ### The two `--freeze` settings answer different questions
 

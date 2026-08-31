@@ -1,0 +1,44 @@
+MIT License
+
+Copyright (c) 2026 黃子修, 黃少鯤, 江彥萱 (Tunghai University)
+
+SCOPE — please read before reuse.
+
+This license covers only the work written by this project's authors:
+
+    integration/            fusion/                 TDX_Data/
+    CWA/                    Map/Capture_Road_Node.py
+    paper_work/*.md         README.md               requirements.txt
+
+    and the following files, which live inside vendored upstream directories
+    but were written by us:
+        STGAT/evaluate_masked_taichung.py
+        STGAT/run_infer_taichung.py
+        STGAT/transfer_taichung.py
+        STGCN/evaluate_masked.py
+        STGCN/run_infer_taichung.py
+
+It does NOT cover the vendored upstream projects, which keep their own terms, nor
+the datasets, which carry the terms of their original providers. See NOTICE.md for
+the per-directory breakdown — in particular, STGCN/ is LGPL-2.1 and STGAT/ upstream
+carries no license file at all.
+
+---
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

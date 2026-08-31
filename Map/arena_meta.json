@@ -1,0 +1,72 @@
+{
+  "min_lanes": 3,
+  "corridor_included": true,
+  "connect_included": true,
+  "connect_edges": 1154,
+  "corridor_edges": 134,
+  "full_nodes": 9904,
+  "full_edges": 27022,
+  "arena_nodes": 840,
+  "arena_edges": 1690,
+  "branch_nodes": 663,
+  "seed_edges_total": 601,
+  "seed_edges_in_arena": 416,
+  "coverage_by_edge": 0.24615384615384617,
+  "coverage_by_length": 0.1408280775999748,
+  "coverage_full_network": 0.02224113685145437,
+  "sections_kept": 202,
+  "sections_in_arena": 141,
+  "mean_hops": 28.69333333333333,
+  "max_hops": 79,
+  "demo_endpoints": {
+    "東海大學": {
+      "node": 2225388567,
+      "snap_distance_m": 107.91795752488908,
+      "in_arena": true
+    },
+    "台中車站": {
+      "node": 703698045,
+      "snap_distance_m": 86.94067306144028,
+      "in_arena": true
+    }
+  },
+  "comparison": {
+    "1": {
+      "nodes": 9904,
+      "edges": 27022,
+      "covered_edges": 601,
+      "coverage": 0.02224113685145437,
+      "coverage_by_length": 0.018663267151613597,
+      "branch_nodes": 8514,
+      "sections_in_arena": 202
+    },
+    "2": {
+      "nodes": 1946,
+      "edges": 3905,
+      "covered_edges": 448,
+      "coverage": 0.1147247119078105,
+      "coverage_by_length": 0.10362524035516894,
+      "branch_nodes": 1530,
+      "sections_in_arena": 149
+    },
+    "3": {
+      "nodes": 1442,
+      "edges": 2737,
+      "covered_edges": 416,
+      "coverage": 0.15199123127511874,
+      "coverage_by_length": 0.1405568743042335,
+      "branch_nodes": 1107,
+      "sections_in_arena": 141
+    },
+    "4": {
+      "nodes": 1355,
+      "edges": 2580,
+      "covered_edges": 414,
+      "coverage": 0.16046511627906976,
+      "coverage_by_length": 0.149329189136423,
+      "branch_nodes": 1047,
+      "sections_in_arena": 140
+    }
+  },
+  "note": "Node ids are the original OSM ids, so arena routes render on the full Map/graph_*_taichung.csv unchanged. 台灣大道 is in the arena via the corridor but carries no TDX prediction -- S3 closes it, which needs the road, not a forecast for it."
+}

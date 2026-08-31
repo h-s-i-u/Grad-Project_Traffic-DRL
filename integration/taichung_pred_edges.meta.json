@@ -1,0 +1,39 @@
+{
+  "source": "fusion",
+  "n_edges": 601,
+  "speed_min": 1.0,
+  "speed_max": 120.0,
+  "inputs": {
+    "stgcn": {
+      "model": "stgcn",
+      "checkpoint": "STGCN_taichung_p3.pt",
+      "n_pred": 3,
+      "minutes_ahead": 15,
+      "split": "test",
+      "window_index": 7518,
+      "target_row": 50273,
+      "target_time": "2026-07-21 05:20:00+00:00",
+      "n_sections": 202
+    },
+    "stgat": {
+      "model": "stgat",
+      "checkpoint": "experiment_taichung/best_model.pth",
+      "n_pred": 3,
+      "minutes_ahead": 15,
+      "split": "test",
+      "window_index": 7538,
+      "target_row": 50273,
+      "target_time": "2026-07-21 05:20:00+00:00",
+      "n_sections": 202
+    }
+  },
+  "fusion": {
+    "model": "fusion",
+    "n_pred": 3,
+    "split": "test",
+    "target_row": 50273,
+    "n_sections": 202,
+    "fusion_epoch": 25,
+    "dump": "dump_fusion_test_p3.npz"
+  }
+}

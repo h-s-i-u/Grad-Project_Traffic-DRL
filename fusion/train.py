@@ -107,6 +107,14 @@ def main():
                          "it 尖峰時段/星期週期, which it cannot represent from speed "
                          "alone -- measured in 實驗記錄 §13.20 ③. Incompatible with "
                          "warm-starting that path (the first block's shape changes)")
+    ap.add_argument("--single-path", choices=["stgcn", "stgat"], default=None,
+                    help="control: bypass the gate and send ONE path to the head. "
+                         "--single-path stgat answers 'what does the second path plus "
+                         "the gate buy, given this training regime?' -- if it reaches "
+                         "the dual-path score on its own, the answer is nothing. The "
+                         "question is live because the learned gate settles at 0.78-0.83 "
+                         "(the output is ~4/5 STGAT) while the best FIXED blend beats "
+                         "STGAT by only 0.40% (實驗記錄 §13.7, §13.22 ⑥c)")
     ap.add_argument("--extended-gate", action="store_true")
     ap.add_argument("--head-hidden", type=int, default=0,
                     help="0 = a single FC, as the proposal writes it")
@@ -161,7 +169,13 @@ def main():
                           n_pred=tr.n_pred, freeze=cli.freeze,
                           extended_gate=cli.extended_gate,
                           head_hidden=cli.head_hidden, stgcn_channels=n_cn,
+                          single_path=cli.single_path,
                           cuda=cli.device.startswith("cuda")).to(cli.device)
+    if cli.single_path:
+        print(f"  ⚠ CONTROL RUN: gate bypassed, only the {cli.single_path.upper()} path "
+              f"reaches the head.\n    The other path still runs (no gradient) so the "
+              f"RNG stream matches a dual-path run.\n    This is not a fusion model -- "
+              f"do not report it as one, and do not --dump-all it.")
     frozen = model.frozen_paths()
     # Only warm-start what is frozen (a frozen random backbone is pure noise) unless the
     # caller explicitly asks to warm-start everything.
@@ -236,6 +250,12 @@ def main():
                            "freeze": cli.freeze, "extended_gate": cli.extended_gate,
                            "head_hidden": cli.head_hidden, "loss": cli.loss,
                            "stgcn_channels": n_cn,
+                           # Load-bearing: W1/W3 exist in the state dict even when a
+                           # single path was trained, so evaluate.py rebuilding with the
+                           # default learned gate would load cleanly and then score a
+                           # gate that was never trained. Silent, and the number looks
+                           # plausible. evaluate.py reads this key for that reason.
+                           "single_path": cli.single_path,
                            # Nothing verifies these when a path is trained from scratch
                            # (there is no checkpoint whose shapes must match), so they
                            # are recorded here: "fusion vs STGCN alone" is only a fair
