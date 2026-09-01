@@ -79,7 +79,7 @@ the only adapter in the model.
 
 ---
 
-## 🔴 Run `verify.py` first
+## Run `verify.py` first
 
 ```bash
 cd fusion
@@ -165,7 +165,7 @@ gate is only a rule for combining them. `--single-path` records itself in the me
 `evaluate.py` reads it back: a single-path checkpoint still carries W1 and W3, so a
 default rebuild would load cleanly and then score a gate that was never trained.
 
-> 🔴 **`--dump-all` overwrites the decision layer's input.** The dump name
+> **`--dump-all` overwrites the decision layer's input.** The dump name
 > `integration/dump_fusion_<split>_p<N>.npz` does not encode which checkpoint produced
 > it, and `integration/make_drl_input.py --source fusion` reads exactly those three
 > files to build the graph the DRL agent was trained against. An ablation that dumps
@@ -180,7 +180,7 @@ default rebuild would load cleanly and then score a gate that was never trained.
 
 | Item | Proposal | Here | Why |
 |---|---|---|---|
-| Climate features into STGAT's node input | ✅ | ❌ **not used** | Measured effect 0.66 km/h, far below the models' own MAE of 3.47, and non-monotonic (實驗記錄 §13.9) |
+| Climate features into STGAT's node input | yes | **not used** | Measured effect 0.66 km/h, far below the models' own MAE of 3.47, and non-monotonic (實驗記錄 §13.9) |
 | Loss | L2 (MSE) | **masked MAE** by default (`--loss mse` restores it) | MAE is what every number in 實驗記錄 is reported in; optimising a different quantity than the one reported lets the two diverge quietly |
 | Masking | not specified | **external `mask.npy`** | 24.6% of cells are imputed and scoring on them is nearly free. METR-LA's `null_val=0.0` mechanism does **not** transfer — imputed cells hold real numbers, so there is no sentinel to test for (實驗設計 §2.3) |
 | Per-path normalisation | not specified | **each path keeps its own** | Unifying it invalidates the pretrained weights and makes warm-starting impossible |
@@ -191,8 +191,8 @@ default rebuild would load cleanly and then score a gate that was never trained.
 | | `--freeze both` | `--freeze none` (the proposal) |
 |---|---|---|
 | what learns | gate + head only | everything |
-| can it break the 0.934 error correlation | ❌ **no** — two frozen backbones are wrong in the same places, and no gate invents independent information | ✅ **yes** — the gate finally gives the paths a reason to specialise |
-| one model, three horizons | ❌ the STGCN backbone is bound to a single horizon | ✅ the new FC head emits all twelve steps |
+| can it break the 0.934 error correlation | **no** — two frozen backbones are wrong in the same places, and no gate invents independent information | **yes** — the gate finally gives the paths a reason to specialise |
+| one model, three horizons | **no** — the STGCN backbone is bound to a single horizon | **yes** — the new FC head emits all twelve steps |
 | cost | minutes | one full training run |
 
 實驗記錄 §13.7 already measured the ceiling for the frozen case: the best **fixed** weight

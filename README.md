@@ -24,7 +24,9 @@ The system has three modules (proposal §4):
    neighbour-by-neighbour. Its reward is the proposal's **eq. (4) global penalty**:
    `R = −α·Δtravel_time − λ₁·Σ max(0, ρ−ρ_th)² − λ₂·Var(ρ)`, which punishes
    over-saturating any link and rewards spreading load evenly.
-3. **Visualization** — SUMO + web dashboard (planned; see Roadmap).
+3. **Visualization** — a web dashboard in [`demo/`](demo/) that puts the herding baseline
+   and the trained agent side by side and lets a road be shut at runtime. It runs
+   without a simulator; SUMO slots in behind the same interface (see Roadmap).
 
 The fusion model lives in [`fusion/`](fusion/); everything that connects prediction →
 decision lives in [`integration/`](integration/), which doubles as a standalone
@@ -84,6 +86,7 @@ Both run through `python run_compare.py --graph {metr-la,taichung}`.
 | **`integration/`** | **The core of this project**: prediction → decision pipeline, routing policies, the PPO/E-GAT agent, and the evaluation harness. See its [README](integration/README.md). |
 | **`fusion/`** | **Gated Fusion (proposal §4.3)**: the dual-path model with the eq. 3 gate, plus the unified dataloader both backbones share. See its [README](fusion/README.md). |
 | **`TDX_Data/`** | Taichung traffic-data pipeline: fetch TDX → build network → build speed matrix → convert for both models. See its [README](TDX_Data/README.md). |
+| **`demo/`** | **The PoC (proposal §5)**: two routing policies side by side on the arena, with a road that can be closed at runtime. FastAPI + one static page, and it runs without SUMO. See its [README](demo/README.md). |
 | `Map/` | Taichung OSM road network (`Map_fined/` = the raw export from 黃少鯤) + the simplified routing graph, speed matrix, mask and adjacency |
 | `CWA/` | Central Weather Administration rainfall — evaluated, then **deliberately excluded**; see below |
 | `paper_work/` | Experimental design, development log, architecture diagram, written reports |
@@ -271,12 +274,39 @@ See [`integration/README.md`](integration/README.md) for the policy/metric detai
 
 ---
 
+### 8. The interactive demo (proposal §5: the PoC)
+
+```bash
+pip install fastapi uvicorn
+cd demo
+python app.py --drl ../integration/checkpoints/taichung/drl_fusion_togo25.pt
+# http://127.0.0.1:8000
+```
+
+Two panes over identical demand — the herding baseline and the trained agent — with the
+arena's edges coloured by load / capacity and buttons that shut a road and make both
+sides re-plan. **No simulator required**; SUMO later replaces one class behind the same
+five-method `Backend` interface, and neither the server nor the page changes.
+
+Each pane is a batch assignment of 800 vehicles, because eq. 4 couples vehicles through
+the load they leave behind and that coupling is the only place the policies differ.
+Both panes drive the trips *every* policy could route, for the same reason the reported
+comparison does: a pane with fewer cars carries less load and would post a better
+worst-rho without its policy having earned it.
+
+**Nothing the page displays is a result.** It moves vehicles under the same BPR
+volume-delay function, but it is not a microscopic traffic simulation — no car-following,
+junctions or signals. Every reported number comes from `run_compare.py`.
+
 ## Results
 
 ### Prediction (Taichung, masked — real observations only)
 
-202 TDX sections, 50,283 timesteps, 73.8% real observations. STGCN needs one model per
-horizon; STGAT emits 12 steps from one.
+202 TDX sections, 50,283 timesteps, split 70/15/15 in time. The matrix is 24.6% imputed;
+the scores below are computed only where the test split's `y_mask` is true, which is
+**73.8%** of its cells — a lower share than the matrix average because data quality
+falls over time (train 75.9%, val 74.8%, test 73.8%). STGCN needs one model per horizon;
+STGAT emits 12 steps from one.
 
 | model | 15 min | 30 min | 60 min | 12-step avg |
 |---|---:|---:|---:|---:|
@@ -323,7 +353,7 @@ Three properties of the data that fell out of the HA comparison:
   weekday peak at 60 min (5.56). Peak also carries 21.0% of weekday cells against the
   16.7% a uniform day would give — ETag pairs more often when there is more traffic.
 
-⚠️ **Open question.** HA scores **3.5054** on weekday peaks at 60 min, below STGAT's
+**Open question.** HA scores **3.5054** on weekday peaks at 60 min, below STGAT's
 overall 3.6276. Those are different cell subsets and cannot be compared directly, but it
 has to be checked: if the model does not beat HA during peak hours, its headline margin
 comes from off-peak and weekends — and peak is the only time routing matters. Answering
@@ -499,16 +529,19 @@ so the whole table is fed by the model the architecture section describes.
 |---|---:|---:|---:|---:|
 | 5 load-aware | −60.4±4.1% | −7.7±0.5% | −35.7±4.5% | 100% |
 | 6 oracle | −61.2±4.1% | −17.4±0.8% | −43.3±2.2% | 100% |
-| 7 DRL — greedy | −63.0±4.5% ⚠️ | −13.6±1.0% ⚠️ | −36.1±3.4% ⚠️ | **82.8%±2.8** |
+| 7 DRL — greedy \* | −63.0±4.5% | −13.6±1.0% | −36.1±3.4% | **82.8%±2.8** |
 | **7 DRL — beam-8** | **−55.8±5.6%** | **−12.9±0.8%** | **−27.5±2.9%** | **96.0%±1.8** |
+
+\* Not comparable: served 82.8% is under the 95% threshold, so those deltas cover an
+easier subset of trips.
 
 Against the proposal's targets, using the beam rows:
 
 | metric | target | S2 | S3 |
 |---|---|---:|---:|
-| ATT (burst load) | ↓20–30% | **−36.0%** ✅ | **−55.8%** ✅ |
-| worst-link ρ | ↓20% | **−24.6%** ✅ | **−27.5%** ✅ |
-| Gini(edge load) | ↓30% | −10.1% ❌ | −12.9% ❌ |
+| ATT (burst load) | ↓20–30% | **−36.0%** met | **−55.8%** met |
+| worst-link ρ | ↓20% | **−24.6%** met | **−27.5%** met |
+| Gini(edge load) | ↓30% | −10.1% missed | −12.9% missed |
 
 #### Feeding the decision layer from fusion changed nothing measurable
 
@@ -535,12 +568,12 @@ This is the fourth independent check on the same conclusion, and the strongest: 
 earlier three varied coverage or the forecast source, this one also **retrained the
 agent on the new observations**.
 
-⚠️ It compares two agents from single training runs, so "fusion makes no difference" and
+It compares two agents from single training runs, so "fusion makes no difference" and
 "PPO's run-to-run variance swamps the difference" cannot be separated here. The
 structural argument — 86% of routes identical, 14.1% coverage by length — is what makes
 the first far more likely.
 
-#### 🔴 A policy that gives up on the hard trips can "beat" the upper bound
+#### A policy that gives up on the hard trips can "beat" the upper bound
 
 Look at the S3 greedy row: **ATT −63.0%, better than the oracle's −61.2%.** It is not
 better. It abandoned 17.2% of the demand, and the trips it abandoned are the hard ones,
@@ -599,7 +632,7 @@ evening out the distribution; the agent trades travel time for spread. That is e
 working as designed — and under the incident it captures 74% of the oracle's Gini
 improvement, against 56% on the undisturbed network.
 
-⚠️ **Gini is computed over the union of edges any policy used**, so adding a row shifts
+**Gini is computed over the union of edges any policy used**, so adding a row shifts
 every row's Gini slightly (ATT and worst-link ρ are unaffected). Compare Gini only
 within one run.
 
@@ -850,9 +883,9 @@ request** costs, end to end, state preparation included.
 | one vehicle's route, ms | GPU / S2 | GPU / S3 | CPU / S2 | CPU / S3 |
 |---|---:|---:|---:|---:|
 | **policy 7, greedy** | **13.87** | **13.76** | 21.50 | 22.13 |
-| under 50 ms | ✅ **100%** | ✅ **100%** | ✅ **100%** | ✅ **100%** |
+| under 50 ms | **100%** | **100%** | **100%** | **100%** |
 | policy 7, beam-8 | 90.02 | 103.89 | 43.95 | 51.24 |
-| under 50 ms | ❌ 22.5% | ❌ 22.2% | ❌ 67.1% | ❌ 52.5% |
+| under 50 ms | 22.5% | 22.2% | 67.1% | 52.5% |
 | 1 / 4, one Dijkstra request | ~0.29 | ~0.29 | ~0.28 | ~0.30 |
 | **6 oracle, one request** | **~0.31** | **~0.32** | **~0.31** | **~0.33** |
 
@@ -974,14 +1007,28 @@ disclosed with its numbers. It is not correct to say rainfall has no effect.
       (estimated ~35 ms) and remove the quality/latency conflict
 - [ ] Vectorise `_compute_enc_ctx`: a per-node Python loop, now a third of the GPU
       per-vehicle model cost
-- [ ] Widen the hotspot funnel (`N_HOTSPOTS`) — the last untried lever on Gini
+- [x] ~~Widen the hotspot funnel (`N_HOTSPOTS`)~~ — **ruled out, not untried.** The
+      random scenario is that lever taken to its extreme, and it measures Gini −16.0%
+      against hotspot's −19.1%: a wider funnel makes the distribution worse, not better
 - [ ] `tpred_fallback` sensitivity: `free_flow` vs `network_mean`, both reported
 - [ ] One-horizon vs three-horizon agent ablation (now feasible: fusion emits all three)
 
 **Cross-track**
 
-- [ ] SUMO microscopic simulation + TraCI integration
-- [ ] Web dashboard (event injection, live re-routing visualization)
+- [x] **Resident router** (`integration/reroute_service.py`) — the graph and the agent
+      held in memory, answering "given these vehicles and this closure, where does each
+      one go" per request. `policies.py` is untouched: on the default path it calls the
+      same functions `run_compare.py` calls
+- [x] **Web dashboard** (`demo/`) — two policies side by side, a road that can be shut at
+      runtime, and no simulator required
+- [x] Road shapes recovered for drawing (`demo/build_geometry.py`) — an arena edge is a
+      merged chain and only its endpoints survive into the CSV, so 4.3 km of road drew as
+      one straight line. 1,690 of 1,690, median length residual 0.0000%
+- [ ] SUMO microscopic simulation + TraCI integration — a second `Backend` behind the
+      same five methods; nothing in `demo/` changes when it lands
+- [ ] Mode B: SUMO's state as the agent's observation rather than the BPR model. Needs a
+      retrain, and it is the only experiment that could show policy 7 earning its place
+      against the analytic oracle
 
 Detailed design and history: [`paper_work/實驗設計.md`](paper_work/實驗設計.md) ·
 [`paper_work/實驗記錄_DRL決策模組.md`](paper_work/實驗記錄_DRL決策模組.md)

@@ -34,7 +34,7 @@ python convert_to_stgat_dataset.py     # → STGAT/data/taichung/{train,val,test
 python build_arena.py
 ```
 
-⚠️ **步驟 5 之後必須手動確認 `STGCN/script/dataloader.py` 的 `n_vertex`（目前為 202）**，
+**步驟 5 之後必須手動確認 `STGCN/script/dataloader.py` 的 `n_vertex`（目前為 202）**，
 否則訓練會 shape mismatch。STGAT 不需要改碼——`--num_of_vertices` 是 CLI 參數。
 
 ---
@@ -51,7 +51,7 @@ python build_arena.py
 
 ```
 Map/Map_fined/*.csv ────► build_simplified_network.py ──► simplified_{nodes,edges}_taichung.csv
-（組員以 Capture_Road_Node.py 產生）        【路網簡化】      simplified_meta.json
+（黃少鯤以 Capture_Road_Node.py 產生）        【路網簡化】      simplified_meta.json
   39,920 節點 / 43,711 段                                          │
                                                                    │
 fetch_tdx_section_metadata.py ─────────► build_network.py ◄────────┘
@@ -95,7 +95,7 @@ fetch_tdx_section_live.py ──────────────────
 
 **節點 id 全程沿用原始 OSM id**，所以場域上算出的路徑可直接畫在完整地圖上。
 
-🔴 **地圖的框選範圍會永久決定 `n_vertex`**：地圖小 → 通過 map-matching 的路段少 →
+**地圖的框選範圍會永久決定 `n_vertex`**：地圖小 → 通過 map-matching 的路段少 →
 **模型的節點數在訓練當下就鎖死**，之後換多大的地圖都補不回來。
 （歷史：舊地圖東界短 3.1 km 且缺北屯區，244 個路段只有 212 個匹配得上；
 `Map_fined` v3 擴大框選後 **244/244 全數匹配**，存活路段由 175 升到 202。）
@@ -131,7 +131,7 @@ fetch_tdx_section_live.py ──────────────────
 實測**最大相對誤差 1.51e-15**（機器精度）、0 組不可達；超過 `1e-6` 直接 `exit 1`。
 另設「不可達比例 > 2% 直接失敗」的連通性硬檢查。
 
-> 🔴 **為何需要第二道檢查**：第一版的孤兒環偵測把**被正確合併掉的鏈中間節點**誤判成孤兒
+> **為何需要第二道檢查**：第一版的孤兒環偵測把**被正確合併掉的鏈中間節點**誤判成孤兒
 > 又加回去，等於撤銷簡化（300 組 OD 有 248 組不可達），**卻仍印出 `PASS`**。
 > **檢查只跑在沒壞的部分上，會給出假的通過訊號。**
 
@@ -147,7 +147,7 @@ fetch_tdx_section_live.py ──────────────────
 | 含**種子邊**的鏈 | `section_to_edges.csv` 用 `(u, v)` 掛預測，合併會**靜默切斷 TDX 訊號** |
 | **Demo 端點**（東海大學、台中車站） | Demo 用 node id 指定起訖 |
 
-> ⚠️ 第二條是漏掉後才補的——首次執行時**台中車站剛好是個中途節點，被合併掉了**。
+> 第二條是漏掉後才補的——首次執行時**台中車站剛好是個中途節點，被合併掉了**。
 
 ### 兩個轉檔程式的差異
 
@@ -162,7 +162,7 @@ fetch_tdx_section_live.py ──────────────────
 > **time-of-day 的時區**：原始時間戳是 UTC，轉檔時已 **+8 轉成台灣時間**，讓日週期對齊
 > 實際尖峰時段。
 >
-> 🔴 **STGCN 的 `vel.csv` 沒有這個特徵，而那不只是「輸入不對等」**：計畫書指派 STGCN Path
+> **STGCN 的 `vel.csv` 沒有這個特徵，而那不只是「輸入不對等」**：計畫書指派 STGCN Path
 > 萃取「規則性（尖峰時段、星期週期）」，而週期性正是 time-of-day 定義的東西——
 > 實測 STGCN 在最 routine 的分桶與平日尖峰**輸給一個連模型都不是的歷史平均**。
 > `fusion/` 的雙路模型已補上這個通道（`--stgcn-tod`）。詳見 `實驗記錄` §13.20 ③。
@@ -173,7 +173,7 @@ fetch_tdx_section_live.py ──────────────────
 |---|---|
 | `diagnose_missing_data.py` | 缺值分布診斷（曾用來抓出 `$top` 設太小導致資料被截斷的 bug） |
 | `diagnose_speed_anomalies.py` | 車速異常診斷（就是這支發現 68% 無效佔位值） |
-| `build_adjacency_matrix.py` | 鄰接矩陣工具，給決策／SUMO 組員自行調參用 |
+| `build_adjacency_matrix.py` | 鄰接矩陣工具，供決策層與 SUMO 整合調參用 |
 | `map_section_to_network.py`、`build_taichung_stgcn_dataset.py` | **已被 `build_network.py` / `build_speed.py` 取代**，保留供對照 |
 
 ---
@@ -199,7 +199,7 @@ python build_arena.py --min-lanes 3
 
 ---
 
-## ⚠️ 三個一定要知道的資料特性
+## 三個一定要知道的資料特性
 
 ### 1. 原始資料有 68% 是無效佔位值
 
@@ -221,7 +221,7 @@ taichung_vel.csv（50,283 × 202，表面上 0% 缺失）
 > **異常值為何轉缺值而非 clip**：clip 會留下一個「捏造的觀測」並被 mask 標成 `True`，
 > 等於拿假資料去評分；轉缺值則交由補值機制處理，且 mask 正確標成 `False`。
 
-### 2. 🔴 評估必須用 mask，否則成績虛低
+### 2. 評估必須用 mask，否則成績虛低
 
 最終仍有約 **24.6% 的儲存格是補值**（METR-LA 只有 7.13% 缺失，是其 3.5 倍）。
 mask（`True` = 真實觀測）在**補值之前**取得，兩個模型都已備妥現成工具：
@@ -250,7 +250,7 @@ cd STGAT && python evaluate_masked_taichung.py                        # 一次�
 時程拉長後補值反而變成雜訊。**兩端會在 12 步平均上互相抵銷（STGAT 僅 +0.5%）——
 只看平均會完全錯過這件事**，必須逐 horizon 檢視。**兩個模型 × 兩份資料集皆同一型態。**
 
-#### 2b. ⚠️ MAPE 的 float32 陷阱
+#### 2b. MAPE 的 float32 陷阱
 
 `torch.Tensor()` 會把 float64 降成 float32，使真實的 `0 km/h` 在 z-score 逆轉換後變成
 **約 1.27e-6** 而非精確 0。用 `y != 0` 過濾會完全失效，單一格就能讓 MAPE 爆成 **6356%**。
@@ -278,7 +278,7 @@ elif dataset_name == 'taichung':
 | **時區** | `DataCollectTime` 為 **UTC**，台灣時間需 **+8 小時**。做尖峰／星期分析前務必轉換 |
 | **速度單位** | **km/h**（METR-LA 是 mph，不可混用） |
 | **一對多對應** | 一個 TDX 路段橫跨數個路口，`section_to_edges.csv` 記錄它涵蓋的所有 OSM edge。244 個路段展開後共 **715 條唯一邊**，其中屬於 202 個存活路段的有 **601 條** |
-| **金鑰** | 放在 `.env`（已被 `.gitignore` 忽略）。⚠️ 舊金鑰曾以明文進過 git 歷史，**建議至 TDX 後台重新產生** |
+| **金鑰** | 放在 `.env`（已被 `.gitignore` 忽略）。舊金鑰曾以明文進過 git 歷史，**建議至 TDX 後台重新產生** |
 | **`.jsonl` 不入版控** | 11.9 GB，需自行執行 `fetch_tdx_section_live.py` 產生 |
 | **Windows 的 int32 陷阱** | `astype(int)` 在 Windows 是 int32，而 **84.7% 的 OSM id 超過 2³¹−1**。一律用 `to_numpy(dtype="int64")` |
 
@@ -311,7 +311,7 @@ elif dataset_name == 'taichung':
 | HA（歷史平均） | 4.0486 | 4.0489 | 4.0496 |
 | persistence | 4.2872 | 4.6744 | 5.1281 |
 
-🔴 **報告寫法：相對 persistence 與相對 HA 兩組都要列。** 相對 persistence 的領先隨時程
+**報告寫法：相對 persistence 與相對 HA 兩組都要列。** 相對 persistence 的領先隨時程
 **擴大**（−21% → −29%），相對 HA 卻**縮小**（−16.5% → −10.4%）——因為 HA 不隨時程退化。
 只引用前者會把「persistence 變爛」誤記成「模型變好」。
 
@@ -321,7 +321,7 @@ elif dataset_name == 'taichung':
 
 ---
 
-## 🔴 一個必須知道的下游事實：**預測對路由沒有可測量的影響**
+## 一個必須知道的下游事實：**預測對路由沒有可測量的影響**
 
 決策層量到的結論，會影響這份 pipeline 的優先順序：
 

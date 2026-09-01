@@ -204,7 +204,7 @@ python run_compare.py --graph taichung --vehicles 800 --repeat 10 \
 Gini is consistently the tightest metric — ±0.6% across demand draws against ±8% for
 ATT, on both networks. The headline claim rests on it.
 
-⚠️ **Gini is computed over the union of edges any policy used**, so adding a policy row
+**Gini is computed over the union of edges any policy used**, so adding a policy row
 shifts every row's Gini slightly. ATT and worst-link ρ are unaffected. Compare Gini only
 within one run.
 
@@ -219,10 +219,10 @@ worst-link ρ **−93.0%**, Gini **−35.0%**, clearing all three of the proposa
 
 | Δ vs herding baseline | S2 (rush-hour funnel) | S3 (arterial closure) | target |
 |---|---:|---:|---|
-| ATT | **−36.0±7.9%** | **−55.8±5.6%** | ↓20–30% ✅ |
-| worst-link ρ | **−24.6±2.0%** | **−27.5±2.9%** | ↓20% ✅ |
-| Gini(edge load) | −10.1±0.6% | −12.9±0.8% | ↓30% ❌ |
-| served% | 99.9±0.2 | 96.0±1.8 | ≥95% ✅ |
+| ATT | **−36.0±7.9%** | **−55.8±5.6%** | ↓20–30% — met |
+| worst-link ρ | **−24.6±2.0%** | **−27.5±2.9%** | ↓20% — met |
+| Gini(edge load) | −10.1±0.6% | −12.9±0.8% | ↓30% — missed |
+| served% | 99.9±0.2 | 96.0±1.8 | ≥95% — met |
 
 Gini falls short — and so does the oracle (−18.1% / −17.4%), which places that gap in
 the scenario rather than in training. On METR-LA the ceiling was −50.7% and the agent
@@ -248,7 +248,7 @@ claim, isolated about as cleanly as it can be.
   baselines 2–4 collapse onto 1 — which would hollow out every delta, since 4 is the
   denominator. `TDX_Data/build_arena.py` carves out 840 nodes / 1,690 edges at 24.6%
   coverage. Node ids stay the original OSM ids, so routes still render on the full map.
-- 🔴 **Prediction has no measurable effect on routing here**, and this is a data limit
+- **Prediction has no measurable effect on routing here**, and this is a data limit
   rather than a bug. Coverage *by length* — what a shortest-path search actually weighs
   — is 14.1%, so unobserved edges all take the same fallback multiplier and a uniform
   scaling cannot reorder paths. Measured four independent ways: doubling coverage by
@@ -272,13 +272,13 @@ claim, isolated about as cleanly as it can be.
   subsets — measured, two runs differed by 8 trips and static's ATT(common) moved 3.7%
   between them, which is larger than the effect being looked for.
 - **`--repeat` is the reporting mode.** Single-seed numbers are for quick checks only.
-- 🔴 **Quality and latency come from two different decodings, and both must be stated
+- **Quality and latency come from two different decodings, and both must be stated
   together.** Beam-8 is the row to quote for ATT / Gini / worst-ρ, because greedy's
   17.2% attrition under S3 inflates its ATT delta past the oracle's. But greedy is the
   row that clears the proposal's 50 ms budget; beam-8 runs the decoder once per live
   beam per hop — 261 calls per vehicle against 23 — and lands at 44–104 ms. Quoting
   whichever is favourable in each table would be indefensible.
-- 🔴 **The Dijkstra baselines are 43–68x faster than the agent**, policy 6 included
+- **The Dijkstra baselines are 43–68x faster than the agent**, policy 6 included
   (~0.31 ms per request, re-pricing amortised). Getting under 50 ms needs no learning.
   Policy 6 is fast *and* better here because the arena's cost function is its own — BPR
   plus eq.4 is what it optimises directly — so the agent's case rests on settings where
