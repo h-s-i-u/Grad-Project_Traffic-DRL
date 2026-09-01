@@ -119,6 +119,20 @@ results.json
 paper_work/*
 !paper_work/實驗記錄_DRL決策模組.md
 !paper_work/實驗設計.md
+!paper_work/demo_開發記錄.md
+
+# =========================
+# demo
+# =========================
+# Screenshots are megabytes each and git keeps them forever.
+demo/*.png
+demo/vendor/
+# ...but the recovered road shapes have to ship. They are 169 KB, deterministic, and
+# demo/build_geometry.py CANNOT regenerate them from a fresh clone: it reads
+# Map/simplified_* and Map/Map_fined/, neither of which is in the repository. Without
+# this file the demo draws every merged edge as a straight chord -- including 十甲東路,
+# 4.3 km of road as one line across the city -- with no local way to fix it.
+!demo/arena_geometry.json
 
 # =========================
 # Large geodata (not used by the pipeline)

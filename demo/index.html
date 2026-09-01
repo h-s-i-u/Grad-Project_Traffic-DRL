@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>動態路網優化 — 即時互動 Demo</title>
+
+<!-- Leaflet from a CDN. app.py warns at startup how to vendor these two files into
+     demo/vendor/ so the booth does not depend on the venue's wifi. The map TILES also
+     come from the network; without them the basemap is blank but every road still
+     draws, because the polylines come from our own graph. -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --line:#30363d; --fg:#e6edf3; --dim:#8b949e;
+    --accent:#58a6ff; --warn:#f0883e; --bad:#f85149;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{
+    background:var(--bg); color:var(--fg); display:flex; flex-direction:column;
+    font:14px/1.5 -apple-system,"Segoe UI","Noto Sans TC",system-ui,sans-serif;
+  }
+  header{
+    display:flex; align-items:baseline; gap:16px; flex-wrap:wrap;
+    padding:10px 18px; border-bottom:1px solid var(--line); background:var(--panel);
+  }
+  header h1{font-size:16px;margin:0;font-weight:600;letter-spacing:.02em}
+  header .meta{color:var(--dim);font-size:12px}
+  header .clock{margin-left:auto;color:var(--dim);font-variant-numeric:tabular-nums}
+
+  #maps{flex:1;display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);
+        min-height:0}
+  .pane{position:relative;display:flex;flex-direction:column;background:var(--bg);
+        min-height:0;min-width:0}
+  .pane .map{flex:1;min-height:0;background:#0b0f14;position:relative}
+  .pane h2{
+    margin:0;padding:8px 14px;font-size:14px;font-weight:600;
+    background:var(--panel);border-bottom:1px solid var(--line);
+    display:flex;align-items:baseline;gap:10px;
+  }
+  .pane h2 small{font-weight:400;color:var(--dim);font-size:12px}
+  .stats{
+    display:flex;gap:20px;padding:8px 14px;background:var(--panel);
+    border-top:1px solid var(--line);flex-wrap:wrap;
+  }
+  .stat{display:flex;flex-direction:column;line-height:1.25}
+  .stat .k{font-size:11px;color:var(--dim);white-space:nowrap}
+  .stat .v{font-size:17px;font-variant-numeric:tabular-nums}
+  .stat .v.hot{color:var(--bad)} .stat .v.warm{color:var(--warn)}
+
+  footer{
+    display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+    padding:10px 18px;border-top:1px solid var(--line);background:var(--panel);
+  }
+  footer .label{color:var(--dim);font-size:12px;margin-right:2px}
+  button{
+    font:inherit;font-size:13px;padding:7px 13px;border-radius:7px;cursor:pointer;
+    background:#21262d;color:var(--fg);border:1px solid var(--line);
+  }
+  button:hover:not(:disabled){border-color:var(--accent)}
+  button:disabled{opacity:.45;cursor:default}
+  button.shut{background:#3d1417;border-color:#6e2b2b;color:#ffb4ae}
+  button.shut.on{background:var(--bad);border-color:var(--bad);color:#1a0000}
+  button.reset{margin-left:auto}
+
+  .legend{
+    position:absolute;right:10px;bottom:10px;z-index:500;
+    background:rgba(22,27,34,.92);border:1px solid var(--line);border-radius:7px;
+    padding:7px 10px;font-size:11px;color:var(--dim);pointer-events:none;
+  }
+  .legend .bar{height:7px;width:140px;border-radius:4px;margin:4px 0;
+    background:linear-gradient(90deg,#1f4f7a,#2d7f5e,#3fb950,#d29922,#f0883e,#f85149)}
+  .legend .ends{display:flex;justify-content:space-between}
+  .legend .shut-key{display:flex;align-items:center;gap:6px;margin-top:6px}
+  .legend .shut-key i{width:26px;height:0;flex:none;
+    border-top:3px dashed #ff4fd8}
+  .leaflet-container{background:#0b0f14}
+  /* Darkens the basemap without touching anything drawn on top: the filter is on the
+     tile IMAGES, and the road polylines are canvas above them. */
+  .leaflet-tile{filter:invert(1) hue-rotate(180deg) brightness(.78) contrast(.85)
+                saturate(.45)}
+  #status{padding:6px 18px 2px;color:var(--dim);font-size:11px;background:var(--bg);
+          border-top:1px solid var(--line);min-height:2.2em}
+  #status.busy{color:var(--warn)}
+  /* Required, not decorative: the basemap is OpenStreetMap data under ODbL, which asks
+     to be credited wherever the tiles are shown. */
+  #credit{padding:0 18px 8px;color:#5c6672;font-size:10px;background:var(--bg)}
+  #credit a{color:#5c6672}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>基於機器學習與圖論的動態路網優化</h1>
+  <span class="meta">台中場域 · 840 節點 / 1,690 邊 · 邊的顏色 = 負載 / 容量</span>
+  <span class="clock" id="clock">—</span>
+</header>
+
+<div id="maps"></div>
+
+<footer>
+  <span class="label">封閉道路：</span>
+  <span id="roads"></span>
+  <button class="reset" id="reset">重設</button>
+</footer>
+<div id="status">載入中…</div>
+<div id="credit">
+  底圖 &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank"
+     rel="noopener">OpenStreetMap</a> 貢獻者（ODbL）
+  ｜ 路網取自 OpenStreetMap，經簡化為 840 節點 / 1,690 邊的場域
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+"use strict";
+
+// Display strings live here, not in the API. A React front end would reuse this table
+// verbatim and hit exactly the same four endpoints.
+const LABEL = {
+  herding: {title: "④ 羊群基準", sub: "每台車各自選預測最快路 — 沒有協調"},
+  drl:     {title: "⑦ 本系統",   sub: "PPO + Residual E-GAT，獎勵含全域懲罰"},
+  oracle:  {title: "⑥ 解析上界", sub: "eq.4 的解析最佳化 — 理論參考，非競爭對手"},
+  static:  {title: "① 靜態 Dijkstra", sub: "忽略預測與負載"},
+};
+const STATS = [
+  ["worst-ρ 最壅塞路段", "rho"], ["Gini 負載分佈", "gini"],
+  ["本回合車輛數", "fleet"], ["在途", "driving"], ["已達", "arrived"],
+  ["受困", "stranded"], ["回合", "episode"],
+  ["本回合指派", "plan"], ["封路後改道", "reroute"],
+];
+
+// rho -> colour. The break at 0.85 is RHO_THRESHOLD from config.py: above it eq.4's
+// saturation term starts firing, so it is the number this picture is about.
+const STOPS = [[0,"#1f4f7a"],[0.25,"#2d7f5e"],[0.5,"#3fb950"],
+               [0.85,"#d29922"],[1.2,"#f0883e"],[2,"#f85149"]];
+const IDLE = "#243040";
+function colour(r){
+  for (let i = STOPS.length - 1; i >= 0; i--) if (r >= STOPS[i][0]) return STOPS[i][1];
+  return IDLE;
+}
+function width(r){ return 1.5 + 2.8 * Math.min(r, 2); }
+
+// A closed road must not be readable as a load value, so magenta: it is nowhere on the
+// ramp above, which runs blue -> green -> amber -> orange -> red. Red would be worst-case
+// congestion and "shut" is a different fact. Dashes carry it further, and a closed edge
+// keeps this style even at zero load -- otherwise the road the visitor just shut fades to
+// the same dark grey as every road nobody is using.
+const SHUT_STYLE = {color: "#ff4fd8", weight: 5, opacity: 1, dashArray: "7 5"};
+const IDLE_STYLE = {color: IDLE, weight: 1, opacity: .6, dashArray: null};
+
+const panes = {};          // key -> {map, layers, shown}
+let order = [], syncing = false, pending = false;
+
+function makePane(key, geometry, host){
+  const L10n = LABEL[key] || {title: key, sub: ""};
+  const wrap = document.createElement("div");
+  wrap.className = "pane";
+  wrap.innerHTML = `
+    <h2>${L10n.title}<small>${L10n.sub}</small></h2>
+    <div class="map" id="map-${key}">
+      <div class="legend">負載 / 容量<div class="bar"></div>
+        <div class="ends"><span>0</span><span>0.85 飽和</span><span>2+</span></div>
+        <div class="shut-key"><i></i>已封閉路段</div></div>
+    </div>
+    <div class="stats">${STATS.map(([k, id]) =>
+      `<div class="stat"><span class="k">${k}</span>
+       <span class="v" id="${id}-${key}">—</span></div>`).join("")}</div>`;
+  host.appendChild(wrap);
+
+  // Canvas, not SVG: 1,690 polylines per pane restyled every second is past what the
+  // SVG renderer keeps smooth, and there are two panes.
+  const map = L.map(`map-${key}`, {
+    preferCanvas: true, renderer: L.canvas({padding: 0.4}),
+    // Leaflet's own control is off because two maps would print the same credit twice
+    // in two corners. The credit itself is NOT dropped -- it is the permanent #credit
+    // line under the page, which is what OSM and CARTO ask for.
+    zoomControl: key === order[0], attributionControl: false,
+  });
+  // OpenStreetMap's own tiles: no API key. CARTO's dark basemap now requires one and
+  // stamps "API KEY REQUIRED" across every tile without it. These are light, so the
+  // #maps .leaflet-tile CSS filter darkens them -- it applies to the tile images only,
+  // which is why it does not touch the road polylines drawn above them.
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+              {maxZoom: 19, opacity: 0.75}).addTo(map);
+
+  const layers = {}, pts = [];
+  for (const [eid, seg] of Object.entries(geometry)) {
+    layers[eid] = L.polyline(seg, {color: IDLE, weight: 1, opacity: .6,
+                                   interactive: false}).addTo(map);
+    pts.push(seg[0], seg[1]);
+  }
+  map.fitBounds(L.latLngBounds(pts), {padding: [10, 10]});
+
+  // Lock the two viewports together, or the visitor is comparing two different places.
+  map.on("move zoom", () => {
+    if (syncing) return;
+    syncing = true;
+    for (const [k, p] of Object.entries(panes))
+      if (k !== key) p.map.setView(map.getCenter(), map.getZoom(), {animate: false});
+    syncing = false;
+  });
+
+  panes[key] = {map, layers, shown: new Map()};
+}
+
+function paint(key, edges, shut){
+  const p = panes[key];
+  if (!p) return;
+  const seen = new Set();
+
+  function touch(eid, rho){
+    const lyr = p.layers[eid];
+    if (!lyr) return;
+    seen.add(eid);
+    // "shut" is cached in place of the saturation, so opening or closing a road restyles
+    // it even when its load has not changed.
+    const state = shut.has(eid) ? "shut" : rho;
+    if (p.shown.get(eid) === state) return;
+    p.shown.set(eid, state);
+    lyr.setStyle(state === "shut" ? SHUT_STYLE
+      : {color: colour(rho), weight: width(rho), opacity: .95, dashArray: null});
+  }
+
+  for (const eid in edges) touch(eid, edges[eid]);
+  for (const eid of shut) if (!(eid in edges)) touch(eid, 0);   // shut and empty
+  for (const eid of [...p.shown.keys()]) {       // emptied since the last poll
+    if (seen.has(eid)) continue;
+    p.shown.delete(eid);
+    p.layers[eid].setStyle(IDLE_STYLE);
+  }
+}
+
+function stat(id, key, text, cls){
+  const el = document.getElementById(`${id}-${key}`);
+  if (el) { el.textContent = text; el.className = "v" + (cls ? " " + cls : ""); }
+}
+
+function render(s){
+  const any = Object.values(s.panes)[0];
+  document.getElementById("clock").textContent =
+    (s.finished ? "回合結束 · " : "") +
+    `模擬時間 ${Math.round(any ? any.t : 0)} s · 負載窗 ${s.window_s} s` +
+    (s.dropped ? ` · 本回合排除 ${s.dropped} 趟（並非每個策略都排得出路線）` : "") +
+    (s.closed.length ? ` · 已封閉 ${s.closed.length} 條邊` : "");
+
+  // Driven by the server, not by which button was clicked, so a page reload still shows
+  // the right roads as shut.
+  const roads = new Set(s.closed_roads || []);
+  for (const b of document.querySelectorAll("button.shut"))
+    b.classList.toggle("on", roads.has(b.dataset.road));
+
+  const shut = new Set(s.closed);
+  for (const key in s.panes) {
+    const d = s.panes[key];
+    paint(key, d.edges, shut);
+    stat("rho", key, d.worst_rho.toFixed(3),
+         d.worst_rho >= 1.2 ? "hot" : d.worst_rho >= 0.85 ? "warm" : "");
+    stat("gini", key, d.gini_load.toFixed(4));
+    stat("driving", key, d.driving);
+    stat("arrived", key, d.arrived);
+    stat("stranded", key, d.stranded, d.stranded ? "warm" : "");
+    stat("fleet", key, d.fleet);
+    stat("episode", key, d.episode);
+    // Two separate events, never mixed. `plan` is this episode's assignment: of the 800
+    // trips demanded, how many THIS policy could route on its own -- which differs from
+    // 本回合車輛數 (the common subset both panes drive) and that gap is worth seeing,
+    // since a smaller fleet would otherwise pass as a better policy. `reroute` is the
+    // visitor's closure: of the cars still driving, how many got a new route.
+    const pl = d.plan, rr = d.last_reroute;
+    stat("plan", key, pl && pl.active
+      ? `${pl.planned}/${pl.active} · ${pl.seconds.toFixed(1)} s` : "—");
+    stat("reroute", key, rr && rr.active
+      ? `${rr.routed}/${rr.active} · ${rr.seconds.toFixed(1)} s` : "—");
+  }
+}
+
+const HELP = "兩張地圖跑同一批車、同一份需求，只有路由策略不同。點按鈕封閉一條道路，" +
+  "兩邊會各自用自己的策略重新規劃。｜ 需求 = S2 尖峰漏斗：每回合 800 趟，" +
+  "起點在場域內均勻隨機，終點集中在入度最高的 4 個 hub——這個集中正是羊群效應的來源。" +
+  "｜「本回合車輛數」是兩邊共同跑的車數（兩個策略都排得出路線的行程）；" +
+  "「本回合指派」是該策略自己排得出幾趟（分母 800）；" +
+  "「封路後改道」是封路當下有多少在途車輛拿到新路線（分母是當時在途數）。" +
+  "｜ 這是決策層的示意，不是微觀交通模擬——報告的正式數字由 run_compare.py 產生。";
+
+function setBusy(msg){
+  const el = document.getElementById("status");
+  el.className = msg ? "busy" : "";
+  el.textContent = msg || HELP;
+  for (const b of document.querySelectorAll("footer button")) b.disabled = !!msg;
+}
+
+async function poll(){
+  try {
+    const s = await (await fetch("/state")).json();
+    render(s);
+    if (!pending) setBusy(s.busy ? `重新規劃中：${s.busy}…` : "");
+  } catch (e) { /* server restarting; the next tick retries */ }
+}
+
+async function post(url, body, label){
+  if (pending) return;
+  pending = true;
+  setBusy(label);
+  try {
+    const res = await fetch(url, {method: "POST",
+      headers: {"content-type": "application/json"}, body: JSON.stringify(body || {})});
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+  } catch (e) {
+    setBusy(`失敗：${e.message}`);
+    await new Promise(r => setTimeout(r, 3000));
+  } finally {
+    pending = false;
+    setBusy("");
+    poll();
+  }
+}
+
+(async function init(){
+  const geo = await (await fetch("/geometry")).json();
+  order = geo.panes.map(p => p.key);
+  const host = document.getElementById("maps");
+  if (order.length === 1) host.style.gridTemplateColumns = "1fr";
+  for (const key of order) makePane(key, geo.edges, host);
+
+  const roads = document.getElementById("roads");
+  for (const r of geo.roads) {
+    const b = document.createElement("button");
+    b.className = "shut";
+    b.dataset.road = r.road;
+    b.textContent = r.road;
+    // The listing's ORDER is not impact -- neither length nor load predicts it
+    // (closure.py has the measured table). The tooltip shows what is actually known.
+    b.title = `${r.edges} 條邊 · ${r.km.toFixed(1)} km · ` +
+              `封閉後仍連通 ${(r.scc_frac * 100).toFixed(1)}%`;
+    b.onclick = () => post("/close", {road: r.road}, `封閉 ${r.road}，兩邊重新規劃中…`);
+    roads.appendChild(b);
+  }
+  document.getElementById("reset").onclick = () => post("/reset", {}, "重設中…");
+
+  setBusy("");
+  poll();
+  setInterval(poll, 1000);
+})();
+</script>
+</body>
+</html>
