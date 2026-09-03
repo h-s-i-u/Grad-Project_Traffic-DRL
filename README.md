@@ -794,15 +794,26 @@ units.
 
 #### Fine-tuning from it does work, which is the other half of the claim
 
-| | best epoch | epochs run | wall clock | 15 min | 30 min | 60 min |
-|---|---:|---:|---:|---:|---:|---:|
-| from scratch (A2) | **23** | 64 | 4024.6 s | **3.3802** | **3.5127** | **3.6276** |
-| **fine-tuned from the transfer** | **7** | 47 | 3941.9 s | 3.4137 | 3.5304 | 3.6510 |
+| | best epoch | epochs run | 15 min | 30 min | 60 min |
+|---|---:|---:|---:|---:|---:|
+| from scratch (A2), original unseeded run | 23 | 64 | 3.3802 | 3.5127 | 3.6276 |
+| from scratch, `--seed 1` / `2` / `3` | 21 / 25 / 14 | 62 / 66 / 55 | 3.3819 / 3.4114 / 3.4201 | 3.5072 / 3.5452 / 3.5363 | 3.6180 / 3.6372 / 3.6248 |
+| **from scratch, four draws** | **14–25 (20.8 ± 4.8)** | | **3.398 ± 0.020** | **3.525 ± 0.018** | **3.627 ± 0.008** |
+| **fine-tuned from the transfer** (one run) | **7** | 47 | 3.4137 | 3.5304 | **3.6510** |
 
-Final quality is within the 1% threshold at all three horizons (+0.50 to +0.99%, all
-slightly worse), and the best epoch arrives in **7 rather than 23**. The proposal says
-"usable after fine-tuning for a few epochs" — seven is a few. **So §5's first clause
-fails and its second holds.**
+The best epoch arrives at **7, below the lowest of four from-scratch draws (14)** —
+about 2.9σ under their mean. The proposal says "usable after fine-tuning for a few
+epochs" — seven is a few. **So §5's first clause fails and its second holds.** An
+earlier version of this section said "3.3× faster"; that was 23/7 from two single
+runs, and the ratio moves with whichever draw you happen to get (2× against the
+lowest draw, 3× against the mean), so it is not reported.
+
+Final quality: at 15 and 30 min the fine-tuned model sits inside the from-scratch
+seed spread (1.1–1.2% wide), so those differences are noise. At 60 min it is above
+all four from-scratch draws (+0.38% over the worst) — consistently but slightly
+worse, still inside the 1% threshold. The fine-tuned arm is a single unseeded run;
+"7 lies outside the from-scratch distribution" is what these numbers support, not
+"the two distributions do not overlap".
 
 The two results are not in tension once stated properly: the same initialisation is a
 *bad predictor* and a *good starting point*. Its weights compute the wrong function, yet
@@ -816,8 +827,12 @@ the plateau. The pretrained run converges sooner but to a *slightly* worse plate
 is the usual shape. And most importantly: **`STGAT/train.py` had no seed at all until 31
 Aug** — no `--seed` argument existed and the seeding lines were commented out, while
 `STGCN/main.py` and `fusion/train.py` have defaulted to 42 from the start. A1, A2 and
-A3-b are therefore single unseeded draws, so 7-vs-23 looks well outside noise but cannot
-be claimed rigorously until the from-scratch run is repeated over several seeds.
+A3-b were therefore single unseeded draws. The from-scratch run has since been repeated
+over three seeds (the table above), which is what put a range on A2's side of the
+comparison; A1 and the fine-tuned run remain single draws, and the report has to say so.
+The same three runs are the first measurement of STGAT's seed noise, and it bears on the
+fusion ablations: the three "zero contribution" gaps (0.03–0.43%) all sit inside it,
+while the −1.9% that the report does claim sits about nine standard deviations outside.
 
 ### Why the Gini target is not met, measured rather than argued
 
@@ -981,11 +996,14 @@ disclosed with its numbers. It is not correct to say rainfall has no effect.
 - [x] **A3-a: zero-shot transfer, METR-LA → Taichung** (proposal §5) — **it does not hold.**
       95.6% of the weights transfer by shape, but no way of supplying the remaining 4.4%
       beats a randomly initialised network, and all of them lose badly to persistence
-- [x] **A3-b: fine-tune from the transferred weights — it does hold.** Best epoch 7
-      against 23 from scratch, final MAE within 1% at every horizon
-- [ ] Run the from-scratch STGAT over several seeds, to establish how much best-epoch
-      varies naturally — `--seed` only exists as of 31 Aug, so 7-vs-23 is still two
-      single unseeded runs
+- [x] **A3-b: fine-tune from the transferred weights — it does hold.** Best epoch 7,
+      below all four from-scratch draws (14–25); final MAE within 1% at every horizon
+- [x] From-scratch STGAT over three seeds (21 / 25 / 14), to establish how much
+      best-epoch varies naturally — this is what turned "7 vs 23" into "7 vs 14–25"
+      and retired the "3.3×" figure. It also gave the first seed-noise floor for the
+      fusion ablations: all three "zero contribution" gaps sit inside it, the −1.9%
+      sits outside
+- [ ] The fine-tuned arm over the same three seeds — still a single run
 
 **Decision (Track B)**
 
