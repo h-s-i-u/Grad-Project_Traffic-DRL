@@ -177,3 +177,84 @@ arena_*        同上（52.5%，其餘是真的單行）
 | `demo/controller.py`（`SumoBackend`） | 待做——江彥萱。建議順序：先 `sh build_net.sh` 產出 `.net.xml` → 寫死封閉一條路驗掉 TraCI 的三個 API → 才接 `Router` → 最後接前端 |
 | React 版 | 待做。API 已框架無關，換前端只動 `index.html` 加 `app.py` 兩行 |
 | 攤位前要做 | vendoring Leaflet；用 `--episodes 1` 對一次數字；決定 `--speed` 與 `--refresh` |
+
+---
+
+## 8. SUMO 的接點（09-02 補；此前只存在於對話中）
+
+`reroute_service.py` 從頭到尾不 import SUMO，接縫只有 `demo/app.py` 的 `Backend` 五個方法。
+`geometry()` / `roads()` 是一行轉發給 `Router`，**真正要寫的只有 `state()` / `close_road()` /
+`reset()`**。
+
+### 每個模擬步（背景執行緒）
+
+```python
+traci.simulationStep()
+on_edge = {v: traci.vehicle.getRoadID(v) for v in traci.vehicle.getIDList()}
+lw.observe(traci.simulation.getTime(), on_edge)      # lw = LoadWindow()
+```
+
+### `state()`（1 Hz 輪詢）
+
+```python
+st = router.network_state(lw.counts())   # worst_rho / gini_load / frac_saturated / edges
+```
+
+【必讀】**ATT 不從這裡拿。** `network_state` 沒有它，因為離線的 ATT 是 BPR 模型的推估；
+live 的真值只有 SUMO 量得到（`tripinfo`，或 arrival − depart）。
+
+### `close_road(road)`
+
+```python
+edges = router.road_edges(road)                    # "臺灣大道" -> 83 個 edge_id
+for e in edges:
+    traci.edge.setDisallowed(e, ["all"])           # 讓 SUMO 也看起來關了
+
+active = [(v, traci.vehicle.getRoadID(v), dest_osmid[v],
+           traci.vehicle.getRoute(v)[traci.vehicle.getRouteIndex(v):])
+          for v in traci.vehicle.getIDList()]
+routes = router.reroute(active, closed=all_closed, policy=key)
+for veh, route in routes.items():
+    traci.vehicle.setRoute(veh, route)             # route[0] 必定是該車當前邊
+```
+
+**`routes` 裡沒有的車不要動**——「不在裡面」是「保持原路線」，不是「無路可走」。
+診斷在 `router.last_stats`（`no_path` / `dead_end` / `max_hops` / `unaffected`）。
+
+### 【必讀】兩個 pane 是兩個獨立的 SUMO 實例
+
+一個模擬跑不出兩種策略——④ 和 ⑦ 產生的車流狀態不同。TraCI 支援多連線：
+
+```python
+traci.start(["sumo", "-c", "s2_4_herding.sumocfg"], label="herding")
+traci.start(["sumo", "-c", "s2_7_drl.sumocfg"],     label="drl")
+traci.switch("herding"); traci.simulationStep()
+traci.switch("drl");     traci.simulationStep()
+```
+
+每個 world 各自一個 `LoadWindow` 與一組 `dest_osmid`，對應 `FakeBackend.worlds`。
+
+> **退路**：只讓 ⑦ 跑 SUMO、④ 那格續用 `FakeBackend` 的 World。
+> 但**那兩格就不再是同一種模擬**，畫面上必須標明。
+
+### 【但書】一個尚未補的缺口：每回合的需求產生器
+
+`demo/` 是回合制的（見 §3.1），但產生每回合需求的 `FakeBackend._episode()` 是私有方法，
+`SumoBackend` 拿不到。兩條路：
+
+| | |
+|---|---|
+| **把它提升成 `Router.demand(episode_n)`**（約 10 行） | 兩個 backend 共用同一份確定性需求。**建議這個**——「兩個世界拿到完全相同的需求」是這個比較能成立的前提 |
+| 每回合重播同一份 `.rou.xml` | 攤位上沒人看那麼久，看不出來；零工作量 |
+
+### 建網（一次）
+
+```bash
+cd integration
+python export_sumo.py --drl checkpoints/taichung/drl_fusion_togo25.pt                       --policies 4,7 --vehicles 800 --window 600
+cd sumo && sh build_net.sh          # 一行 netconvert -> taichung.net.xml
+```
+
+【必讀】**不要從 OSM 重抽路網。** edge id 是 `<from_osmid>_<to_osmid>`，`.net.xml` 與路線
+由同一支程式產生所以恆等；重抽會讓 netconvert 自己生一套 id，那張對照表就是舊交接文件
+掛了兩個月沒解決的問題。
