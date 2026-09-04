@@ -32,8 +32,6 @@ WHAT IS AND IS NOT MEASURED HERE
     and live in the log by section; this is an illustration of them.
 """
 import argparse
-import json
-import random
 import sys
 import threading
 import time
@@ -44,25 +42,16 @@ sys.path.insert(0, str(HERE.parent / "integration"))
 
 
 import config as C                                                    # noqa: E402
-import network as net                                                 # noqa: E402
-import policies as pol                                                # noqa: E402
 from reroute_service import LOAD_WINDOW_S, LoadWindow, Router         # noqa: E402
+# PANES, the Backend contract and the demand generator live in shared.py so that
+# controller.py's SumoBackend gets the SAME trips and the SAME common subset.
+from shared import (PANES, Backend, Funnel, arena_shapes,             # noqa: E402
+                    common_subset, plan_all)
 
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 except (AttributeError, ValueError):
     pass
-
-# Left pane vs right pane. 4 and 7 side by side ARE the demo (handover 5.3); 6 is a
-# dashed theoretical bound and does not belong on screen as a competitor (5.4).
-#
-# Keys and policy numbers only -- no display strings. Which panes EXIST is a backend fact
-# (there is no policy 7 without a checkpoint); what they are CALLED is not, and a React
-# front end would only have to strip them back out again.
-PANES = [
-    {"key": "herding", "policy": 4},
-    {"key": "drl", "policy": 7},
-]
 
 
 class Vehicle:
@@ -213,30 +202,6 @@ class World:
         }
 
 
-class Backend:
-    """What index.html needs. controller.py implements the same five methods over TraCI."""
-
-    def geometry(self):
-        """{edge_id: [[lat, lon], [lat, lon]]} -- sent once, at page load."""
-        raise NotImplementedError
-
-    def roads(self):
-        """[{road, edges, km, corridor, safe}] -- the closable-road buttons."""
-        raise NotImplementedError
-
-    def state(self):
-        """{"panes": {key: snapshot}, "closed": [...], "busy": str}."""
-        raise NotImplementedError
-
-    def close_road(self, road):
-        """Shut a road in every world and re-plan each under its own policy."""
-        raise NotImplementedError
-
-    def reset(self):
-        """Re-open everything and start a fresh fleet."""
-        raise NotImplementedError
-
-
 class FakeBackend(Backend):
     """Two worlds and a stepping thread, no simulator."""
 
@@ -256,34 +221,10 @@ class FakeBackend(Backend):
         self.lock = threading.RLock()
         self.busy = ""
         self._stop = threading.Event()
-        self._scc = sorted(net.largest_scc(router.g))
-        self._hubs = sorted(self._scc, key=lambda x: router.g.in_degree(x),
-                            reverse=True)[:C.N_HOTSPOTS]
-        # Real road shapes if build_geometry.py has been run; straight chords otherwise.
-        # Absence is not an error -- it only changes how bendy roads look.
-        self._detail = {}
-        shapes = HERE / "arena_geometry.json"
-        if shapes.is_file():
-            with open(shapes, encoding="utf-8") as f:
-                self._detail = json.load(f)
-            print(f"[demo] arena_geometry.json: real shapes for {len(self._detail):,} edges")
-        else:
-            print("[demo] no arena_geometry.json -- long merged edges will draw as "
-                  "straight lines. Run `python build_geometry.py` once to fix that.")
+        self.funnel = Funnel(router, seed, vehicles)
+        self._detail = arena_shapes()
         self._build()
         threading.Thread(target=self._run, daemon=True).start()
-
-    def _episode(self, n):
-        """Demand and start offsets for episode `n`. Deterministic: both worlds must get
-        the SAME trips and the SAME starting fractions, or the panes stop comparing.
-
-        Origins anywhere in the SCC, destinations on the four busiest hubs -- the same
-        funnel run_compare.make_demand uses. That concentration is what produces the
-        herding effect, so a demo on uniform demand would have nothing to show.
-        """
-        rng = random.Random(f"{self.seed}-episode-{n}")
-        demand = [(rng.choice(self._scc), rng.choice(self._hubs)) for _ in range(self.n)]
-        return demand, [rng.random() * 0.8 for _ in range(self.n)]
 
     def _build(self):
         self.episode = -1
@@ -300,19 +241,17 @@ class FakeBackend(Backend):
     def _next_episode(self):
         """Plan one episode for every world, then hand them all the SAME trip subset."""
         self.episode += 1
-        demand, offsets = self._episode(self.episode)
-        plans = {}
-        for k, w in self.worlds.items():
+        demand, offsets = self.funnel.episode(self.episode)
+
+        def progress(k):
             self.busy = f"episode {self.episode + 1}: planning {k}"
-            plans[k] = self.r.plan(demand, policy=k, closed=sorted(self.closed))
-            w.plan_stats = dict(self.r.last_stats,
-                                planned=sum(1 for p in plans[k] if p and len(p) >= 3))
-            w.last_reroute = {}          # a new episode has had no closure re-route yet
+        plans, stats = plan_all(self.r, list(self.worlds), demand, self.closed, progress)
         # Every policy has to be able to route a trip for it to count. See World.adopt.
-        keep = [i for i in range(len(demand))
-                if all(p[i] and len(p[i]) >= 3 for p in plans.values())]
+        keep = common_subset(plans)
         self.dropped = len(demand) - len(keep)
         for k, w in self.worlds.items():
+            w.plan_stats = stats[k]
+            w.last_reroute = {}          # a new episode has had no closure re-route yet
             w.adopt(demand, offsets, plans[k], keep)
         self.busy = ""
 

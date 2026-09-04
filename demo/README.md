@@ -16,11 +16,12 @@ Runs without SUMO. Without `--drl` the second pane is omitted.
 
 | File | Contents |
 |---|---|
-| `app.py` | FastAPI application, the `Backend` interface, and `FakeBackend` — two fleets advancing on a background thread with no simulator |
+| `app.py` | FastAPI application and `FakeBackend` — two fleets advancing on a background thread with no simulator |
+| `controller.py` | `SumoBackend` — the same five methods, with the cars in two SUMO instances driven over TraCI. `--backend sumo` imports it. Has a `--selftest` that runs with or without SUMO |
+| `shared.py` | What both backends must agree on: the `Backend` contract, `PANES`, the episode demand generator, the per-policy batch assignment and the common subset |
 | `index.html` | One static page: two synchronised Leaflet maps, the road buttons, and eight figures per pane. No build step |
 | `build_geometry.py` | Recovers the real road shape of every arena edge → `arena_geometry.json` |
 | `arena_geometry.json` | Committed, because the script's inputs are release artifacts rather than repository files. See below |
-| `controller.py` | *not written yet* — a second `Backend` whose state comes from TraCI and whose routes are injected with `traci.vehicle.setRoute()`. `--backend sumo` imports it |
 
 ## `app.py`
 
@@ -46,10 +47,15 @@ printed `798/436`: a numerator from the dispatch over a denominator from the re-
 
 ### `Backend`
 
-Five methods — `geometry`, `roads`, `state`, `close_road`, `reset`. `FakeBackend` is one
-implementation; a TraCI-backed `SumoBackend` in `controller.py` is the other, reached with
-`--backend sumo` and constructed as `SumoBackend(router, vehicles=, speed=)`. Neither
-`app.py` nor `index.html` changes when it lands.
+Five methods — `geometry`, `roads`, `state`, `close_road`, `reset` — defined in
+`shared.py`. `FakeBackend` is one implementation; `SumoBackend` in `controller.py` is the
+other, reached with `--backend sumo` and constructed as `SumoBackend(router, vehicles=,
+speed=)`. Neither `app.py` nor `index.html` knows which one is running.
+
+Demand generation lives in `shared.py` too, on purpose: episode *k* is the same 800 trips
+and the same start fractions whichever backend asks for it, and the common subset is
+computed by the same function. A pane driven by SUMO and a pane driven by the fake
+stepper are therefore still one experiment.
 
 ### `FakeBackend`
 
@@ -149,7 +155,85 @@ is listed with its length ratio. Two edges (one road, both directions) need it.
 `Map/Map_fined/`, neither of which is in the repository, so a fresh clone cannot
 regenerate it.
 
-## Integrating a TraCI backend
+## `controller.py`
+
+```bash
+pip install eclipse-sumo traci sumolib            # binaries on PATH plus the two packages
+cd ../integration
+python export_sumo.py --drl checkpoints/taichung/drl_fusion_togo25.pt   # writes sumo/
+cd sumo && sh build_net.sh && cd ../../demo                            # taichung.net.xml, once
+python controller.py --selftest --mock            # no SUMO: the bookkeeping only
+python controller.py --selftest --drl ../integration/checkpoints/taichung/drl_fusion_togo25.pt
+python app.py --backend sumo --drl ../integration/checkpoints/taichung/drl_fusion_togo25.pt
+```
+
+**One SUMO instance per pane.** A single simulation cannot carry two policies, because
+policy 4 and policy 7 produce different traffic states; `SumoBackend` starts one `sumo`
+process per pane and steps them in lockstep from one thread. Each step is one simulated
+second; `--speed` is how many of them happen per real second.
+
+Everything SUMO-specific is inside the `_Sim` class (start, step, add, where, set_route,
+remove). `_MockSim` implements the same calls with cars that advance one edge every ten
+steps, which is what `--selftest --mock` runs against — it exercises episodes, the
+common subset, closure, route injection, stranding, the mid-junction retry and the
+snapshot, and nothing below the TraCI line.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `DEMO_SUMO_DIR` | `../integration/sumo` | where `taichung.net.xml` is. The backend writes `live.rou.xml` (the vType only) and `live.sumocfg` next to it |
+| `DEMO_SUMO_GUI` | `0` | `1` opens two `sumo-gui` windows instead of headless `sumo` |
+| `DEMO_SUMO_STEP` | `1.0` | simulation step length in seconds |
+
+Four things it does differently from `FakeBackend`, on purpose:
+
+1. **Cars are inserted, not placed.** SUMO cannot put a car mid-route, so the route is
+   cut at the same start fraction both panes use and the car departs at its head. Up to
+   800 insertions at t = 0 queue on their first edges; `pending` in the snapshot is how
+   many have not entered yet.
+2. **A car heading into the closure with no legal route is removed at closure time** and
+   counted as `stranded`. The fake stepper strands the same set when they reach the
+   closed edge; SUMO would instead teleport them across it after `--time-to-teleport`,
+   which is neither honest nor visible. Teleporting is switched off (`-1`).
+3. **Cars from the previous episode keep driving** when the next one is dispatched.
+   Removing them would make cars vanish on screen. They count in `driving`, never in the
+   new episode's `arrived`, `stranded` or `fleet`.
+4. **The closure is not written into SUMO's permissions.** `edge.setDisallowed()` on the
+   closed edges is the obvious move, and the first two live runs did it. It refused
+   20–40 re-routes per pane with `No connection between edge A and edge B`, where B was
+   always a closed edge that the *new* route never contained: SUMO validates a
+   replacement route from the beginning of the car's driven history, which it keeps in
+   front of the new edges, so any car that had used 臺灣大道 earlier in the episode was
+   refused a new route once the road was disallowed — wherever it was by then. The
+   closure lives in the router, which masks the edges, and in rule 2. What a visitor
+   sees is the same: no new car enters the road and the ones on it drive off. `sumo-gui`
+   does not paint the road shut; the web page does.
+
+Two snapshot fields exist only here: `pending` (above) and `rejected` — routes SUMO
+refused at insertion, which happens only if `netconvert` dropped an edge. It should be 0;
+the self-test checks that it is, because a car rejected in one pane and accepted in the
+other silently un-pairs the experiment.
+
+Load is counted the way ρ is defined — edge *entries* over the last ~154 s — from one
+road-id snapshot per step obtained through TraCI subscriptions (three calls per step
+regardless of fleet size, against 800 `getRoadID()` round trips). ATT is not on the
+panel: offline it is the BPR estimate, live the only true value is what SUMO measured,
+and `tripinfo` is where a later version should read it from.
+
+**Two live runs so far (4–5 Sep 2026), 734 cars per pane.** Verified: every exported
+edge id survives `netconvert` (`rejected 0`), the subscription flow loses no car
+(driving + arrived = fleet), `setRoute()` is accepted on cars in motion. The refusals
+were the permission problem above — misread the first time as `netconvert` dropping
+turns at sharp chord angles, which led to an explicit-connections change in
+`export_sumo.py` that has been reverted: an offline probe showed the router's routes
+never contain a closed edge, so the edges SUMO named could only have come from the
+driven history. The `Vehicle 'X' is not known` errors on those runs were the stale
+subscriptions of cars the backend itself had just removed, reported once each on the
+next step; `remove()` now unsubscribes first. One car per closure was refused for being
+mid-junction (`Vehicle is on junction-internal edge leading elsewhere`); such cars are
+`deferred` and re-routed by `step()` once they are back on a normal edge. A third run
+on the reverted network is what closes this section.
+
+### The routing contract
 
 Routing goes through `integration/reroute_service.py`:
 

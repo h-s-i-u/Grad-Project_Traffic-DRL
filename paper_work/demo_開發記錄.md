@@ -31,18 +31,21 @@ lat/lon。所以 `demo/` 做成獨立可運作，SUMO 之後只是把「彩色�
 ## 2. 架構：一個介面，兩個實作
 
 ```
-index.html  ──HTTP/JSON──►  app.py (FastAPI)  ──►  Backend
-                                                    ├── FakeBackend   無模擬器
-                                                    └── SumoBackend   ← controller.py（江彥萱）
+index.html  ──HTTP/JSON──►  app.py (FastAPI)  ──►  Backend（shared.py）
+                                                    ├── FakeBackend   app.py，無模擬器
+                                                    └── SumoBackend   controller.py，兩個 SUMO 實例
+                                                          │
+                                              shared.Funnel / plan_all / common_subset
                                                           │
                                                     reroute_service.Router
                                                           │
                                                     policies.py（未修改）
 ```
 
-`Backend` 只有五個方法：`geometry` / `roads` / `state` / `close_road` / `reset`。
-`--backend sumo` 會 `from controller import SumoBackend`——**江彥萱的插入點是可執行的，
-不是文件上的描述**，而 `FakeBackend` 是一份能跑的參考實作。
+`Backend` 只有五個方法：`geometry` / `roads` / `state` / `close_road` / `reset`，定義在
+`shared.py`。`--backend sumo` 會 `from controller import SumoBackend`。
+**需求產生、逐策略批次指派、共同子集三件事也在 `shared.py`**——兩個 backend 呼叫同一個
+函式，所以「SUMO 那格」和「無模擬器那格」拿到的是同一批 800 趟、同一個共同子集（§9）。
 
 四個端點都是純 JSON over HTTP，所以換 React 前端不用動後端（`demo/README.md` 有對照表）。
 顯示字串刻意放在 `index.html` 的 `LABEL` 表而不是 API 回傳裡。
@@ -174,9 +177,10 @@ arena_*        同上（52.5%，其餘是真的單行）
 | 項目 | 狀態 |
 |---|---|
 | `demo/app.py`、`index.html`、`build_geometry.py`、`arena_geometry.json` | 完成 |
-| `demo/controller.py`（`SumoBackend`） | 待做——江彥萱。建議順序：先 `sh build_net.sh` 產出 `.net.xml` → 寫死封閉一條路驗掉 TraCI 的三個 API → 才接 `Router` → 最後接前端 |
+| `demo/shared.py` | 完成（09-04）：兩個 backend 共用的契約與需求產生器（§9） |
+| `demo/controller.py`（`SumoBackend`） | **已寫（09-04），mock 自測通過；【必讀】尚未在真的 SUMO 上跑過**——這台機器沒裝。§9 列出實機自測要確認的四個假設 |
 | React 版 | 待做。API 已框架無關，換前端只動 `index.html` 加 `app.py` 兩行 |
-| 攤位前要做 | vendoring Leaflet；用 `--episodes 1` 對一次數字；決定 `--speed` 與 `--refresh` |
+| 攤位前要做 | vendoring Leaflet；用 `--episodes 1` 對一次數字；決定 `--speed` 與 `--refresh`；情境圖層（實驗記錄 §18.5 Q，未定案） |
 
 ---
 
@@ -207,8 +211,7 @@ live 的真值只有 SUMO 量得到（`tripinfo`，或 arrival − depart）。
 
 ```python
 edges = router.road_edges(road)                    # "臺灣大道" -> 83 個 edge_id
-for e in edges:
-    traci.edge.setDisallowed(e, ["all"])           # 讓 SUMO 也看起來關了
+closed |= set(edges)                               # 只記在 router 這邊；不要 setDisallowed（§9.5）
 
 active = [(v, traci.vehicle.getRoadID(v), dest_osmid[v],
            traci.vehicle.getRoute(v)[traci.vehicle.getRouteIndex(v):])
@@ -237,15 +240,14 @@ traci.switch("drl");     traci.simulationStep()
 > **退路**：只讓 ⑦ 跑 SUMO、④ 那格續用 `FakeBackend` 的 World。
 > 但**那兩格就不再是同一種模擬**，畫面上必須標明。
 
-### 【但書】一個尚未補的缺口：每回合的需求產生器
+### 每回合的需求產生器：已補（09-04）
 
-`demo/` 是回合制的（見 §3.1），但產生每回合需求的 `FakeBackend._episode()` 是私有方法，
-`SumoBackend` 拿不到。兩條路：
-
-| | |
-|---|---|
-| **把它提升成 `Router.demand(episode_n)`**（約 10 行） | 兩個 backend 共用同一份確定性需求。**建議這個**——「兩個世界拿到完全相同的需求」是這個比較能成立的前提 |
-| 每回合重播同一份 `.rou.xml` | 攤位上沒人看那麼久，看不出來；零工作量 |
+`demo/` 是回合制的（見 §3.1），但產生每回合需求的 `FakeBackend._episode()` 原本是私有方法，
+`SumoBackend` 拿不到。09-02 列的兩條路是「提升成 `Router.demand()`」或「重播同一份 `.rou.xml`」；
+實際走的是第三條：**搬到 `demo/shared.py` 的 `Funnel`**，不動 `integration/`。
+理由：回合是 demo 的概念（`run_compare` 有自己的 `make_demand`），放進 `Router` 等於讓
+路由服務知道「攤位在跑第幾回合」；放在 demo 層兩個 backend 一樣共用，而 `integration/`
+的檔案一行都不用改。
 
 ### 建網（一次）
 
@@ -258,3 +260,123 @@ cd sumo && sh build_net.sh          # 一行 netconvert -> taichung.net.xml
 【必讀】**不要從 OSM 重抽路網。** edge id 是 `<from_osmid>_<to_osmid>`，`.net.xml` 與路線
 由同一支程式產生所以恆等；重抽會讓 netconvert 自己生一套 id，那張對照表就是舊交接文件
 掛了兩個月沒解決的問題。
+
+---
+
+## 9. `controller.py`：SUMO 即時版（09-04 寫成，實機待驗）
+
+09-04 定案 demo 走**即時版**（兩格的車真的在 SUMO 裡跑），不是預錄短片。§8 的接縫照著寫成
+`SumoBackend`；這裡記的是實作時做的決定、mock 自測看到什麼、以及**還沒被真的 SUMO 驗過的
+四個假設**。
+
+### 9.1 結構
+
+| 層 | 內容 |
+|---|---|
+| `shared.py` | `Backend`、`PANES`、`Funnel`（每回合需求，字串種子 → 跨機器同一批）、`plan_all`（逐策略批次指派）、`common_subset`。`FakeBackend` 改為呼叫這些，diff 是刪 30 行 |
+| `controller._Sim` | **所有 TraCI 呼叫都在這一個類別裡**：start / step / add / where / set_route / remove / close_edges。上面的邏輯不碰 traci |
+| `controller._MockSim` | 同五個呼叫、沒有 SUMO：車每 10 步前進一條邊。`--selftest --mock` 跑的是它 |
+| `controller.SumoWorld` | 一格：`LoadWindow`、存活集合、本回合集合、目的地表、封路與改道 |
+| `controller.SumoBackend` | 兩個 `_Sim`（label = pane key）、一條執行緒交替 step、回合制與 `FakeBackend` 相同 |
+
+### 9.2 三個刻意與 `FakeBackend` 不同的地方
+
+| | `FakeBackend` | `SumoBackend` | 為什麼 |
+|---|---|---|---|
+| **車怎麼進場** | 直接放在路徑中途（同一個起始比例） | SUMO 放不了半路的車：**路徑從同一個比例處截斷，車從截斷點出發**。800 台在 t=0 一起插入會在第一條邊排隊，面板多一欄 `pending` | 兩格截在同一處，比較仍成立；排隊是 SUMO 的真實行為 |
+| **無路可走的車** | 走到封閉邊時停下計 `stranded` | **封路當下就移除並計 `stranded`**（剩餘路徑碰到封閉邊、且 router 沒給新路線的那些） | 同一批車、只是提早計。不移除的話 SUMO 會在 `--time-to-teleport` 後把它**瞬移**過封閉路段——既不誠實也看不見。已設 `-1` 關掉瞬移 |
+| **上一回合的殘車** | 換回合時整個車隊被換掉（15% 在途車消失） | **繼續開**，只是不再屬於本回合：算進 `driving`，不算進新回合的 `arrived`／`fleet` | 車在畫面上憑空消失比帳目複雜更糟 |
+
+另外兩個只有這邊才有的欄位：`pending`（上表）與 `rejected`（SUMO 拒收的路線，只在
+netconvert 掉了某條邊時發生，**應為 0**；自測有檢查，因為一格拒收、另一格接受會靜靜地讓兩格
+不再是同一個實驗）。
+
+### 9.3 TraCI 的成本
+
+每步要一份 `{車: 所在邊}` 快照餵 `LoadWindow`。逐車 `getRoadID()` 是 800 次來回；改用
+**訂閱**：`getDepartedIDList()` → 對新進場的車 `subscribe(VAR_ROAD_ID)` →
+`getAllSubscriptionResults()` 一次拿全部。**每步三次呼叫，與車數無關**——這是 5 倍速跑得動
+和跑不動的差別。改道時才逐車 `getRoute()`／`getRouteIndex()`，一次封路一次。
+
+### 9.4 mock 自測看到的
+
+`python controller.py --selftest --mock --vehicles 200 --speed 100 --drive 60`（herding vs oracle，
+沒有 checkpoint 時自動改用這對）：
+
+```
+fleets {'herding': 199, 'oracle': 199}, dropped 1          ← 共同子集，兩格相同
+herding  ep 1 t 150 driving 111 pending 0 arrived 88 rejected 0
+oracle   ep 1 t 150 driving 101 pending 0 arrived 98 rejected 0
+closing 臺灣大道
+herding  active 111 routed 103 applied 103 setRoute-failed 0 stranded 2 no_path 2
+oracle   active 101 routed  93 applied  93 setRoute-failed 0 stranded 4 no_path 4
+reset → episode 1, closed = []
+PASS: 0 problem(s)
+```
+
+第一版跑出 `driving 2 / pending 199 / arrived 0`——不是 bug，是 mock 的車一步一條邊、
+一回合不到一秒就跑完，自測讀到的是剛派出的下一回合。但它暴露了真問題：**換回合時上一回合
+的殘車抵達會算進新回合的 `arrived`**。修法是多一個 `current` 集合（§9.2 第三列）。
+順手把 mock 改成每邊 10 步，讓回合長得足以在中途封路。
+
+### 9.5 第一次實機（09-04）：四個假設驗掉三個，第四個換成另一個問題
+
+`python controller.py --selftest --drl …`，真的 `sumo`、headless、734 台／格：
+
+| 假設 | 結果 |
+|---|---|
+| 匯出的 1,690 條邊 id 全部活過 netconvert | **成立**：`rejected 0` |
+| departed → subscribe → `getAllSubscriptionResults()` 每步拿得到全部在途車 | **成立**：driving 485 + arrived 249 = fleet 734，一台不差 |
+| `setRoute()` 對在途車可用 | **成立**：herding 425 台重排，397 台接受 |
+| `setRoute()` 對還沒進場的車可用 | **沒測到**：封路時 `pending 0`，沒有這種車 |
+
+失敗的 28（herding）／41（drl）台，原因全是同一句：
+
+```
+No connection between edge '8349349076_13021803239' and edge '13021803239_5520441521'
+```
+
+**第一次的診斷是錯的，而且錯到動了 `integration/`。** 我看到「這兩條邊在我們的圖上相連、
+SUMO 卻說沒 connection」，就認定是 netconvert 用幾何角度猜轉向時把合併鏈的直線弦當成迴轉、
+沒建連線，於是在 `export_sumo.py` 加了逐車道明列的 `taichung.con.xml`（3,655 對邊）。
+第二次實機（09-05）：`grep` 證實那對連線**確實在 `.net.xml` 裡**，SUMO **照樣拒絕同一批路線**。
+連線從來不是問題。`export_sumo.py` 已 `git checkout` 還原。
+
+正確的診斷來自兩個唯讀探針：
+
+| 探針 | 結果 |
+|---|---|
+| 被拒的 23 對邊，對照 `edges_by_road(g, "臺灣大道")` | **「to」那條邊 23／23 全是封閉邊**，「from」9／23 是 |
+| 離線呼叫 `Router.reroute()`（128 台車，起點在走廊上或走廊口，三種策略） | **回傳的路線沒有任何一條含封閉邊**（0／0／0） |
+
+所以 SUMO 檢查的**不是我們送進去的路線**。`replaceRouteEdges` 會把車**已經開過的路段**接在
+新路線前面（`getRoute()` 一直回傳含歷史的完整路線，就是這個緣故），然後 `hasValidRoute`
+**從歷史的第一條邊開始驗**——而我們在改道前對封閉邊做了 `setDisallowed(["passenger"])`。
+任何一台這回合曾經開過臺灣大道的車，不管現在人在哪，新路線都會因為歷史裡有一條「不准
+passenger 走」的邊被整條打回票。20／32 台就是有那段歷史的車。
+
+**修法（09-05）：封路不寫進 SUMO 的 permission。** 封閉只存在於 router（遮蔽邊）與 §9.2
+的擱淺規則。訪客看到的一樣：沒有新車開進去、路上的車開離。sumo-gui 不會把路畫成封閉，
+網頁會。
+
+【必讀】**不能用的修法：讓 SUMO 接手改道。** 路線被拒時交給 SUMO 自己的 Dijkstra，等於右邊
+那格有一部分路線悄悄變成 SUMO 的決策——跟 `實驗記錄` 記過的「U-turn fallback 用 ④ 的權重」
+是同一類錯：對比被稀釋，畫面上看不出來。
+
+**教訓**：「SUMO 說 A 和 B 沒 connection」和「我們的路線裡有 A→B」是兩件事，第一次我沒去
+確認第二件就去改建網的程式。兩個探針各三十秒，該在提議改 `integration/` 之前跑，不是之後。
+
+### 9.6 同一次跑出來的另外兩件
+
+**「Vehicle 'e0_v16' is not known」22 筆／19 筆，正好等於 `stranded`。** 第二次實機加了
+`gone`／`remove-failed` 計數後兩者都是 0——所以不是 SUMO 丟了車，是**我們自己 `remove()`
+掉的車，訂閱還留著**，SUMO 下一步評估訂閱時對不存在的車各報一次錯（回應的是訂閱結果，
+命令代碼看起來像 GET）。`remove()` 前先 `unsubscribe()`。
+
+**一台車「Vehicle is on junction-internal edge leading elsewhere」。** 車在路口內部、已經
+選定另一個出口，SUMO 不接受從別的出口走的新路線。這種車記為 `deferred`，`step()` 看到它回到
+一般路段（road id 不以 `:` 開頭）就從它實際到的那條邊重新問一次 router。不處理的話它會照舊路線
+開向封閉路段。
+
+**第三次實機看的行**：`setRoute-failed 0`（`deferred` 可以不為 0，但事後 `still to retry 0`）、
+`gone 0`、`remove-failed 0`、不再有 `not known`。

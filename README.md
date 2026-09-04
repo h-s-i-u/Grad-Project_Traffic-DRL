@@ -1042,8 +1042,20 @@ disclosed with its numbers. It is not correct to say rainfall has no effect.
 - [x] Road shapes recovered for drawing (`demo/build_geometry.py`) — an arena edge is a
       merged chain and only its endpoints survive into the CSV, so 4.3 km of road drew as
       one straight line. 1,690 of 1,690, median length residual 0.0000%
-- [ ] SUMO microscopic simulation + TraCI integration — a second `Backend` behind the
-      same five methods; nothing in `demo/` changes when it lands
+- [x] TraCI backend written (`demo/controller.py`) — a second `Backend` behind the same
+      five methods, one SUMO instance per pane, demand and the common subset shared with
+      the fake stepper through `demo/shared.py`. Passes its self-test against a mock
+      simulator; `app.py` and `index.html` did not change
+- [x] Two self-tests against a real SUMO (4–5 Sep) — every edge id survives
+      `netconvert`, the subscription flow loses no car, `setRoute` works on cars in
+      motion. The 20–40 refusals per pane were SUMO validating a replacement route from
+      the car's driven history after the closed road had been `setDisallowed`; the
+      closure now lives only in the router and the stranding rule. (A first reading
+      blamed `netconvert`'s turn guessing and added explicit connections to the export;
+      an offline probe showed the router never emits a closed edge, and the change was
+      reverted)
+- [ ] Third self-test — `setRoute-failed 0` with no permission change, mid-junction cars
+      re-routed on exit, no stale-subscription errors
 - [ ] Mode B: SUMO's state as the agent's observation rather than the BPR model. Needs a
       retrain, and it is the only experiment that could show policy 7 earning its place
       against the analytic oracle
