@@ -87,6 +87,15 @@ VTYPE = ('<vType id="car" accel="2.6" decel="4.5" sigma="0.5" length="5" '
          'maxSpeed="33.33"/>')
 END_S = 10 ** 9      # never: a live simulation ends when the client closes it
 JUNCTION_MSG = "junction-internal"   # SUMO's reason when a car mid-junction cannot turn
+# A car closer than this to the end of its lane, on a lane that does not link into the
+# new route's next edge, cannot change lanes in time. SUMO accepts the route anyway --
+# the check is per edge, not per lane -- and the car then brakes to a halt at the lane
+# end "because there is no connection to the next edge" (seen live, 5 Sep). Such a car is
+# deferred like a mid-junction one and re-routed from wherever the junction takes it.
+LANE_CHANGE_M = 50.0
+# ...and should the heuristic miss, SUMO moves a car stuck that way after this many
+# seconds rather than leaving it to block the lane for the rest of the run. Counted.
+TELEPORT_DISCONNECTED_S = 60
 
 
 # --------------------------------------------------------------------------- #
@@ -99,7 +108,7 @@ class _Sim:
     touches TraCI itself, and `_MockSim` can stand in with the same five calls.
     """
 
-    def __init__(self, label, cfg, gui=False, step_length=1.0, teleport=-1):
+    def __init__(self, label, cfg, gui=False, step_length=1.0, teleport=-1, slot=0):
         import traci
         import traci.constants as tc
         self._traci, self._tc = traci, tc
@@ -111,14 +120,23 @@ class _Sim:
         cmd = [binary, "-c", str(cfg), "--step-length", str(step_length),
                "--no-step-log", "true", "--no-warnings", "false",
                "--log", str(self.log), "--verbose", "false",
-               "--time-to-teleport", str(teleport), "--start", "true",
-               "--quit-on-end", "true"]
+               "--time-to-teleport", str(teleport),
+               "--time-to-teleport.disconnected", str(TELEPORT_DISCONNECTED_S),
+               "--start", "true", "--quit-on-end", "true"]
+        if gui:
+            # Two identical windows are indistinguishable; the title shows the config
+            # file name, which carries the pane's key, and the panes tile left to right
+            # in the same order as the web page.
+            cmd += ["--window-size", "940,1000", "--window-pos", f"{slot * 960},0"]
         traci.start(cmd, label=label)
         self.c = traci.getConnection(label)
         self.label = label
         self._on_edge = {}
+        self._links = {}      # lane id -> {edge ids it links into}; static, so cached
+        self._length = {}     # lane id -> length in m; static
 
     def step(self):
+        """(time, {vehicle: road id}, [arrived], [teleported]) for one simulation step."""
         c, tc = self.c, self._tc
         c.simulationStep()
         # Subscribe each car the moment it enters; from then on its road id arrives in one
@@ -131,7 +149,27 @@ class _Sim:
                 pass
         res = c.vehicle.getAllSubscriptionResults()
         self._on_edge = {vid: r[tc.VAR_ROAD_ID] for vid, r in res.items()}
-        return c.simulation.getTime(), self._on_edge, list(c.simulation.getArrivedIDList())
+        return (c.simulation.getTime(), self._on_edge,
+                list(c.simulation.getArrivedIDList()),
+                list(c.simulation.getStartingTeleportIDList()))
+
+    def lane_state(self, vid):
+        """(lane id, metres left on it) for a car on a normal edge; None if it is inside a
+        junction or not yet inserted."""
+        lane = self.c.vehicle.getLaneID(vid)
+        if not lane or lane.startswith(":"):
+            return None
+        if lane not in self._length:
+            self._length[lane] = self.c.lane.getLength(lane)
+        return lane, self._length[lane] - self.c.vehicle.getLanePosition(vid)
+
+    def lane_reaches(self, lane, edge):
+        """Whether this lane has a link into `edge`. Lane ids are '<edge id>_<index>'
+        and our edge ids carry exactly one underscore, hence the rsplit."""
+        if lane not in self._links:
+            self._links[lane] = {link[0].rsplit("_", 1)[0]
+                                 for link in self.c.lane.getLinks(lane)}
+        return edge in self._links[lane]
 
     def add(self, vid, route_id, edges):
         self.c.route.add(route_id, list(edges))
@@ -194,7 +232,7 @@ class _MockSim:
             if st[1] >= len(st[0]):
                 arrived.append(vid)
                 del self.veh[vid]
-        return self.t, {vid: st[0][st[1]] for vid, st in self.veh.items()}, arrived
+        return self.t, {vid: st[0][st[1]] for vid, st in self.veh.items()}, arrived, []
 
     def add(self, vid, route_id, edges):
         self.veh[vid] = [list(edges), 0, self.EDGE_STEPS]
@@ -202,6 +240,12 @@ class _MockSim:
     def where(self, vid):
         st = self.veh.get(vid)
         return None if st is None else (st[0][st[1]], list(st[0][st[1]:]), True)
+
+    def lane_state(self, vid):
+        return None                 # no lanes here: nothing is ever deferred for one
+
+    def lane_reaches(self, lane, edge):
+        return True
 
     def set_route(self, vid, edges):
         st = self.veh[vid]
@@ -246,10 +290,14 @@ class SumoWorld:
         self.on_edge = {}          # last step's {vid: road_id}: the cars actually driving
         self.alive = set()         # inserted or waiting to insert, not yet arrived/stranded
         self.current = set()       # the subset of `alive` that belongs to THIS episode
-        self.retry = set()         # re-routed mid-junction; tried again once they exit
+        # Cars a route could not be handed to yet -> the road id they had at the time.
+        # Retried once that id changes: a car inside a junction has left it, a car too
+        # close to a junction has passed it.
+        self.retry = {}
         self.dest = {}             # vid -> destination osmid, for the router
         self.fleet = 0
         self.arrived = self.stranded = self.rejected = self.lost = self.episodes = 0
+        self.teleported = 0
         self._remove_failed = 0
         # Two DIFFERENT events, kept apart on purpose (World in app.py has the story).
         self.plan_stats = {}
@@ -294,26 +342,32 @@ class SumoWorld:
 
     # ------------------------------------------------------------- stepping ---
     def step(self):
-        self.t, self.on_edge, arrived = self.sim.step()
+        self.t, self.on_edge, arrived, teleported = self.sim.step()
         self.window.observe(self.t, self.on_edge)
         self.load = self.window.counts()
         for vid in arrived:
             if vid in self.current:
                 self.arrived += 1
             self._forget(vid)
+        for vid in teleported:
+            if vid in self.alive:
+                self.teleported += 1
+                if self.teleported == 1:
+                    print(f"[sumo:{self.key}] {vid} teleported: stuck at a lane end with "
+                          f"no link to its next edge for {TELEPORT_DISCONNECTED_S} s")
         if self.retry:
-            # A car inside a junction cannot be handed a route that leaves it by another
-            # exit; once it is back on a normal edge (road id not ':...'), route it from
-            # wherever the junction put it.
-            ready = [v for v in self.retry
-                     if v in self.alive and not self.on_edge.get(v, ":").startswith(":")]
+            # Route a deferred car from wherever it is now, once its road id has changed:
+            # out of the junction, or past the one it was too close to.
+            ready = [v for v, was in self.retry.items()
+                     if v in self.alive and self.on_edge.get(v, was) != was
+                     and not self.on_edge.get(v, ":").startswith(":")]
             if ready:
                 self._reroute(ready)
 
     def _forget(self, vid):
         self.alive.discard(vid)
         self.current.discard(vid)
-        self.retry.discard(vid)
+        self.retry.pop(vid, None)
         self.dest.pop(vid, None)
 
     def _strand(self, vid):
@@ -377,14 +431,23 @@ class SumoWorld:
         applied = failed = deferred = 0
         first_failure = ""
         for vid, route in routes.items():
+            if len(route) > 1:
+                # Too close to the junction, on a lane that does not lead where the new
+                # route goes: SUMO would take the route and the car would brake to a
+                # halt at the lane end. Hand it the route after the junction instead.
+                ls = self.sim.lane_state(vid)
+                if ls and ls[1] < LANE_CHANGE_M and not self.sim.lane_reaches(ls[0], route[1]):
+                    deferred += 1
+                    self.retry[vid] = self.on_edge.get(vid, route[0])
+                    continue
             try:
                 self.sim.set_route(vid, route)     # begins on the car's current edge
                 applied += 1
-                self.retry.discard(vid)
+                self.retry.pop(vid, None)
             except Exception as exc:
                 if JUNCTION_MSG in str(exc):
                     deferred += 1               # step() tries again once it has exited
-                    self.retry.add(vid)
+                    self.retry[vid] = self.on_edge.get(vid, ":junction")
                     continue
                 # A route the router produced is legal on our graph. A refusal here is
                 # SUMO disagreeing with us about the network or about the car, and the
@@ -400,7 +463,7 @@ class SumoWorld:
             if vid in routes:
                 continue                        # applied, or deferred with a route waiting
             if not (self.closed & set(rem)):
-                self.retry.discard(vid)         # old route stays clear of the closure
+                self.retry.pop(vid, None)       # old route stays clear of the closure
                 continue
             self._strand(vid)
             stranded += 1
@@ -423,6 +486,8 @@ class SumoWorld:
             "stranded": self.stranded,
             "rejected": self.rejected,
             "lost": self.lost,
+            "teleported": self.teleported,
+            "deferred": len(self.retry),
             "worst_rho": round(st["worst_rho"], 3),
             "gini_load": round(st["gini_load"], 4),
             "frac_saturated": round(st["frac_saturated"], 4),
@@ -439,7 +504,11 @@ class SumoBackend(Backend):
     SumoBackend(router, vehicles=, speed=); everything else comes from the environment:
 
         DEMO_SUMO_DIR   where export_sumo.py wrote taichung.net.xml (default ../integration/sumo)
-        DEMO_SUMO_GUI   1 to open sumo-gui windows instead of headless sumo
+        DEMO_SUMO_GUI   1 to open sumo-gui windows instead of headless sumo. One window per
+                        pane, titled live_<key>.sumocfg, tiled left to right like the page.
+                        Its message pane will show "Route replacement failed ...
+                        junction-internal edge" lines: those cars are deferred and
+                        re-routed a few steps later, not lost.
         DEMO_SUMO_STEP  simulation step length in seconds (default 1)
     """
 
@@ -482,26 +551,32 @@ class SumoBackend(Backend):
                 f"  (do NOT re-extract the network from OSM: the edge ids must stay "
                 f"<from_osmid>_<to_osmid>, which is what makes this file need no id map)")
         rou = self.sumo_dir / "live.rou.xml"
-        cfg = self.sumo_dir / "live.sumocfg"
         with open(rou, "w", encoding="utf-8") as f:
             f.write(f"<routes>\n    {VTYPE}\n</routes>\n")
-        with open(cfg, "w", encoding="utf-8") as f:
-            f.write('<configuration>\n  <input>\n'
-                    '    <net-file value="taichung.net.xml"/>\n'
-                    '    <route-files value="live.rou.xml"/>\n'
-                    '  </input>\n  <time>\n    <begin value="0"/>\n'
-                    f'    <end value="{END_S}"/>\n  </time>\n</configuration>\n')
-        return cfg
+        # One config per pane, identical apart from the name: sumo-gui puts the file name
+        # in the window title, and that is the only way to tell the two windows apart.
+        cfgs = {}
+        for p in self.panes:
+            cfg = self.sumo_dir / f"live_{p['key']}.sumocfg"
+            with open(cfg, "w", encoding="utf-8") as f:
+                f.write('<configuration>\n  <input>\n'
+                        '    <net-file value="taichung.net.xml"/>\n'
+                        '    <route-files value="live.rou.xml"/>\n'
+                        '  </input>\n  <time>\n    <begin value="0"/>\n'
+                        f'    <end value="{END_S}"/>\n  </time>\n</configuration>\n')
+            cfgs[p["key"]] = cfg
+        return cfgs
 
     # ---------------------------------------------------------------- setup ---
     def _build(self):
         for s in self.sims.values():
             s.close()
         self.sims, self.worlds = {}, {}
-        for p in self.panes:
+        for slot, p in enumerate(self.panes):
             k = p["key"]
             sim = (_MockSim(k) if self.mock else
-                   _Sim(k, self.cfg, gui=self.gui, step_length=self.step_length))
+                   _Sim(k, self.cfg[k], gui=self.gui, step_length=self.step_length,
+                        slot=slot))
             self.sims[k] = sim
             self.worlds[k] = SumoWorld(self.r, k, sim)
         self.episode = -1
@@ -683,8 +758,11 @@ def selftest(cli):
         d = s["panes"][k]
         w = be.worlds[k]
         print(f"  {k:<8} t {d['t']:>7} driving {d['driving']:>4} arrived {d['arrived']:>4} "
-              f"stranded {d['stranded']:>3} lost {d['lost']:>3} still to retry {len(w.retry)}")
-        check(not w.retry, f"{k}: every mid-junction car has since been re-routed")
+              f"stranded {d['stranded']:>3} lost {d['lost']:>3} teleported {d['teleported']:>2} "
+              f"still to retry {len(w.retry)}")
+        check(not w.retry, f"{k}: every deferred car has since been re-routed")
+        check(d["teleported"] == 0, f"{k}: no car was left stuck at a lane end "
+                                    f"(the lane-change deferral caught every case)")
 
     be.reset()
     s = settle("after reset")

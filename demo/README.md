@@ -160,8 +160,8 @@ regenerate it.
 ```bash
 pip install eclipse-sumo traci sumolib            # binaries on PATH plus the two packages
 cd ../integration
-python export_sumo.py --drl checkpoints/taichung/drl_fusion_togo25.pt   # writes sumo/
-cd sumo && sh build_net.sh && cd ../../demo                            # taichung.net.xml, once
+python export_sumo.py --drl checkpoints/taichung/drl_fusion_togo25.pt   # writes sumo/, with road shapes
+cd sumo && sh build_net.sh && cd ../../demo   # netconvert, turn check, rebuild only if a turn is missing
 python controller.py --selftest --mock            # no SUMO: the bookkeeping only
 python controller.py --selftest --drl ../integration/checkpoints/taichung/drl_fusion_togo25.pt
 python app.py --backend sumo --drl ../integration/checkpoints/taichung/drl_fusion_togo25.pt
@@ -230,8 +230,48 @@ driven history. The `Vehicle 'X' is not known` errors on those runs were the sta
 subscriptions of cars the backend itself had just removed, reported once each on the
 next step; `remove()` now unsubscribes first. One car per closure was refused for being
 mid-junction (`Vehicle is on junction-internal edge leading elsewhere`); such cars are
-`deferred` and re-routed by `step()` once they are back on a normal edge. A third run
-on the reverted network is what closes this section.
+`deferred` and re-routed by `step()` once they are back on a normal edge.
+
+**Third run (7 Sep), on the reverted network:** `setRoute-failed 0` in both panes, 2 / 8
+cars deferred mid-junction and all re-routed within the next steps, `gone 0`, no
+stale-subscription errors. What the SUMO log added was one car braking to a halt at the
+end of its lane "because there is no connection to the next edge": the new route was
+legal for the *edge* but the car sat in a lane that does not link to the next edge, too
+close to the junction to change lanes, and with teleporting off it would have blocked
+that lane for the rest of the run. Two changes, one run still to confirm them:
+
+- A car within 50 m of its lane end, on a lane that does not link into the new route's
+  next edge, is `deferred` rather than handed the route, and re-routed once its road id
+  changes — the same path a mid-junction car takes. `lane.getLinks()` and lane lengths
+  are static and cached, so this costs two TraCI calls per lane, once.
+- `--time-to-teleport.disconnected 60` as the safety valve: a car the heuristic misses
+  is moved on after 60 s instead of blocking the lane forever. Every such move is
+  counted as `teleported` on the panel, and the self-test requires it to be 0.
+
+**Fourth run (7 Sep):** `teleported 0`, every deferred car re-routed, self-test PASS.
+Running the page with `DEMO_SUMO_GUI=1` then showed two things the self-test cannot: the
+network is drawn as straight chords (a merged edge keeps only its endpoints, so 4 km of
+road is one line across the city and curves are a few kinks), and one closure produced a
+*genuine* `No connection between edge A and edge B` — no permissions involved this time.
+Both come from the same root. `netconvert` infers the turns at a junction from the
+direction the edges arrive in, and the chords of a bending road can meet at 176° where
+the road bends by 30°, so it files the continuation as a U-turn and builds nothing.
+Measured against the network as built: **6 of the graph's 2,767 turns were missing**,
+all same-road continuations on sharp bends (民權路 ×2, 英才路 ×2, 文心路四段, 精武大橋).
+So the reading that was wrong for the 20–40 closed-road refusals was right for these six.
+
+`integration/export_sumo.py` now does two things about it. `--shapes` (default: the
+committed `demo/arena_geometry.json`) writes each edge's recovered polyline as its
+`shape`, which fixes the drawing and cuts the chord-angle false U-turns from 27 to 14.
+`--check-net` then compares every turn the graph allows with every `<connection>` in the
+built `.net.xml`, lists the gaps, and writes a lane-level `taichung.fix.con.xml` stating
+every turn out of each incoming edge that has a gap — `netconvert` reads a listed edge's
+connections as that edge's complete set, so a file naming only the gap drops the edge's
+other turns (the first two-pass build fixed 3 turns and lost 3 others that way).
+`build_net.sh` is two-pass — build, check, rebuild with the fix file if anything is
+missing, check again with `--strict`. Every other edge keeps `netconvert`'s own lane
+assignment. With the shapes in place the first pass had 3 gaps, down from 6. A fifth run
+on that network closes this section.
 
 ### The routing contract
 

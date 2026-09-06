@@ -21,6 +21,29 @@ COORDINATES
     does not reach travel times anyway: every edge carries an explicit `length` taken from
     length_m, so SUMO uses the measured road length rather than the drawn geometry.
 
+SHAPES
+    An arena edge is a merged chain and the CSV keeps only its endpoints, so without more
+    netconvert draws every road as a straight chord -- 4.3 km of 十甲東路 as one line
+    across the city, curves as a few kinks, chords crossing each other. demo/
+    build_geometry.py recovered the real polylines (demo/arena_geometry.json, committed);
+    --shapes projects them and writes each as the edge's `shape`. This is not cosmetic
+    only: netconvert infers the TURNS at a junction from the direction the edges arrive
+    in, and two chords of a bending road can meet at 176 degrees where the road itself
+    bends by 30 -- netconvert then files the continuation as a U-turn and builds no
+    connection (民權路 at node 5521014889, refused live on 7 Sep). Real shapes cut the
+    transitions that look like U-turns from 27 to 14 of 3,655.
+
+CONNECTIONS CHECK
+    The remaining 14 are settled by measurement, not by guessing netconvert's thresholds:
+    `--check-net taichung.net.xml` reads every <connection> the built network has and
+    compares it with every turn the graph allows (u -> v -> w with w != u; immediate
+    reversals are on no route the router can produce, so they are not required). Missing
+    pairs are listed; taichung.fix.con.xml then states, lane by lane, every turn out of
+    each incoming edge that has a gap (netconvert reads a listed edge's connections as
+    complete, so naming only the gap would drop that edge's other turns), and
+    build_net.sh rebuilds with that file and checks again. Every other edge keeps
+    netconvert's own lane assignment.
+
 TIME
     The assignment model has no clock. Vehicles are dispatched in order and load
     accumulates; that ordering is the only temporal structure there is, and the S3 closure
@@ -83,8 +106,22 @@ def pretty(root, path):
         f.write(xml)
 
 
-def write_network(g, out_dir):
+DEFAULT_SHAPES = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "..", "demo", "arena_geometry.json")
+
+
+def load_shapes(path):
+    """{edge_id: [[lat, lon], ...]} from demo/build_geometry.py, or {} if absent."""
+    if not path or not os.path.isfile(path):
+        return {}
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def write_network(g, out_dir, shapes=None):
     xy, proj = project(g)
+    kx, ky, lat0, lon0 = (proj["x_per_deg_lon"], proj["y_per_deg_lat"],
+                          proj["lat0"], proj["lon0"])
     nod = ET.Element("nodes")
     for n in g.nodes:
         x, y = xy[n]
@@ -93,21 +130,117 @@ def write_network(g, out_dir):
     pretty(nod, os.path.join(out_dir, "taichung.nod.xml"))
 
     edg = ET.Element("edges")
+    n_shaped = 0
     for u, v, d in g.edges(data=True):
         # `length` is set explicitly so SUMO uses the measured road length rather than the
         # distance between the drawn node positions; the projection is for looks only.
         # `speed` is m/s, and 88.2% of the underlying limits are imputed at 50/30 km/h
         # per 道路交通安全規則 §93 -- flagged in the CSV as speed_imputed.
-        ET.SubElement(edg, "edge", id=edge_id(g, u, v),
-                      **{"from": str(g.nodes[u]["osmid"]), "to": str(g.nodes[v]["osmid"])},
-                      numLanes=str(int(d.get("lanes", 1) or 1)),
-                      speed=f"{d['length'] / max(d['t0'], 1e-6):.2f}",
-                      length=f"{d['length']:.2f}")
+        eid = edge_id(g, u, v)
+        attrs = {"from": str(g.nodes[u]["osmid"]), "to": str(g.nodes[v]["osmid"]),
+                 "numLanes": str(int(d.get("lanes", 1) or 1)),
+                 "speed": f"{d['length'] / max(d['t0'], 1e-6):.2f}",
+                 "length": f"{d['length']:.2f}"}
+        pts = (shapes or {}).get(eid)
+        if pts and len(pts) >= 2:
+            # The recovered chain runs between exactly these two nodes, so its ends are
+            # snapped onto the node positions netconvert will use.
+            line = [((lon - lon0) * kx, (lat - lat0) * ky) for lat, lon in pts]
+            line[0], line[-1] = xy[u], xy[v]
+            attrs["shape"] = " ".join(f"{x:.2f},{y:.2f}" for x, y in line)
+            n_shaped += 1
+        ET.SubElement(edg, "edge", id=eid, **attrs)
     pretty(edg, os.path.join(out_dir, "taichung.edg.xml"))
 
     with open(os.path.join(out_dir, "projection.json"), "w", encoding="utf-8") as f:
         json.dump(proj, f, indent=2)
-    return proj
+    return proj, n_shaped
+
+
+def graph_turns(g):
+    """{(edge_id A, edge_id B): (u, v, w)} for every u -> v -> w with w != u.
+
+    Immediate reversals (w == u) are left out on purpose: Dijkstra never cycles and the
+    agent never revisits a node, so no route the router can produce contains one, and
+    requiring them would only add turnarounds netconvert rightly skips.
+    """
+    return {(edge_id(g, u, v), edge_id(g, v, w)): (u, v, w)
+            for v in g.nodes for u in g.predecessors(v) for w in g.successors(v)
+            if u != w}
+
+
+def net_connections(net_path):
+    """{(from edge, to edge)} present in a built .net.xml (internal edges skipped)."""
+    have = set()
+    for _, el in ET.iterparse(net_path, events=("end",)):
+        if el.tag == "connection":
+            a, b = el.get("from"), el.get("to")
+            if a and b and not a.startswith(":"):
+                have.add((a, b))
+            el.clear()
+    return have
+
+
+def write_fix_connections(g, want, missing, path):
+    """Lane-level connections for every turn OUT OF an incoming edge that has a gap.
+
+    Not just the missing pairs: netconvert takes a listed edge's connections as that
+    edge's COMPLETE set, so a file naming only the gap drops the turns netconvert had
+    built for the same edge by itself (measured: fixing 3 gaps this way opened 3 others,
+    'Lane ... is not connected from any incoming edge'). Lane i continues into lane i, or
+    the last lane when the next edge is narrower; a wider next edge has its extra lanes
+    fed from the last lane so every lane stays reachable.
+    """
+    from_edges = {a for (a, _), _ in missing}
+    con = ET.Element("connections")
+    n_pairs = n_lanes = 0
+    for (a, b), (u, v, w) in sorted(want.items()):
+        if a not in from_edges:
+            continue
+        na = max(1, int(g.edges[(u, v)].get("lanes", 1) or 1))
+        nb = max(1, int(g.edges[(v, w)].get("lanes", 1) or 1))
+        pairs = [(i, min(i, nb - 1)) for i in range(na)]
+        pairs += [(na - 1, j) for j in range(na, nb)]
+        for i, j in pairs:
+            ET.SubElement(con, "connection", **{"from": a, "to": b,
+                                                "fromLane": str(i), "toLane": str(j)})
+        n_pairs += 1
+        n_lanes += len(pairs)
+    pretty(con, path)
+    return len(from_edges), n_pairs, n_lanes
+
+
+def check_net(g, net_path, out_dir, strict=False):
+    """Compare the built network's turns with the graph's; write the fix file if needed.
+
+    Returns the number of missing pairs. With `strict`, a non-zero count is an error --
+    that is the second pass of build_net.sh, after the fix file has been applied.
+    """
+    want = graph_turns(g)
+    have = net_connections(net_path)
+    missing = sorted((k, want[k]) for k in want if k not in have)
+    fix = os.path.join(out_dir, "taichung.fix.con.xml")
+    print(f"\n{'=' * 88}\nnetwork check -- {os.path.basename(net_path)}\n{'=' * 88}")
+    print(f"turns the graph allows : {len(want):,}")
+    print(f"present in the network : {len(want) - len(missing):,}")
+    print(f"missing                : {len(missing)}")
+    if not missing:
+        if os.path.isfile(fix):
+            os.remove(fix)             # a stale fix file would trigger a needless rebuild
+        print("every turn the router can produce exists in SUMO's network")
+        return 0
+    for (a, b), (u, v, w) in missing:
+        print(f"  {a} -> {b}   ({g.edges[(u, v)].get('road_name') or '-'} -> "
+              f"{g.edges[(v, w)].get('road_name') or '-'}, at node {g.nodes[v]['osmid']})")
+    if strict:
+        raise SystemExit(f"error: {len(missing)} turn(s) still missing after the fix "
+                         f"file was applied -- inspect the pairs above in netedit")
+    n_from, n_pairs, n_lanes = write_fix_connections(g, want, missing, fix)
+    print(f"\nwrote {os.path.basename(fix)}: every turn out of the {n_from} incoming "
+          f"edge(s) with a gap -- {n_pairs} edge pairs, {n_lanes} lane pairs "
+          f"({len(missing)} of them were missing). build_net.sh rebuilds with it and "
+          f"checks again.")
+    return len(missing)
 
 
 def write_routes(g, paths, out_path, window, label, closure=None, close_time=None):
@@ -158,7 +291,24 @@ def main():
     ap.add_argument("--capacity-scale", type=float, default=None)
     ap.add_argument("--close-road", default=None, metavar="PREFIX")
     ap.add_argument("--close-at", type=float, default=0.5, metavar="FRAC")
+    ap.add_argument("--shapes", default=DEFAULT_SHAPES, metavar="JSON",
+                    help="real road shapes from demo/build_geometry.py, written as each "
+                         "edge's `shape` (module docstring: SHAPES). Default: the "
+                         "committed demo/arena_geometry.json if it exists; 'none' to skip")
+    ap.add_argument("--check-net", default=None, metavar="NET.xml",
+                    help="compare a built network's turns with the graph's, write "
+                         "taichung.fix.con.xml for any that are missing, and exit. "
+                         "build_net.sh runs this; nothing else is exported")
+    ap.add_argument("--strict", action="store_true",
+                    help="with --check-net: fail if any turn is still missing")
     cli = ap.parse_args()
+
+    if cli.check_net:
+        g, _ = net.build_graph_for("taichung", capacity_scale=cli.capacity_scale,
+                                   verbose=False)
+        os.makedirs(cli.out_dir, exist_ok=True)
+        sys.exit(1 if check_net(g, cli.check_net, cli.out_dir, cli.strict) and cli.strict
+                 else 0)
 
     C.SCENARIO, C.N_VEHICLES = cli.scenario, cli.vehicles
     want = {p.strip() for p in cli.policies.split(",")}
@@ -183,11 +333,19 @@ def main():
         print(f"closure: {closure.label}, {len(closure)} edges, at {cli.close_at:.0%} of "
               f"the dispatch order -> t = {close_time:.1f} s ({dem_info})")
 
-    proj = write_network(g, cli.out_dir)
+    shapes = {} if cli.shapes == "none" else load_shapes(cli.shapes)
+    proj, n_shaped = write_network(g, cli.out_dir, shapes)
     print(f"\nnetwork -> taichung.nod.xml + taichung.edg.xml + projection.json")
     print(f"  edge ids are <from_osmid>_<to_osmid>, so no id mapping table is needed")
     print(f"  projection: equirectangular about ({proj['lat0']:.5f}, {proj['lon0']:.5f}); "
           f"every edge carries an explicit length, so geometry does not affect travel time")
+    if n_shaped:
+        print(f"  shapes: {n_shaped:,} edges drawn along their recovered road shape "
+              f"({os.path.relpath(cli.shapes)}); the rest are straight in reality")
+    else:
+        print(f"  shapes: none -- every merged edge will draw as a straight chord and "
+              f"netconvert will guess turns from those chords. Run demo/build_geometry.py "
+              f"or pass --shapes")
 
     routed = {}
     if "1" in want:
@@ -240,11 +398,25 @@ def main():
                   "w", encoding="utf-8") as f:
             json.dump(sorted(rows, key=lambda r: -r["rho"]), f, indent=1)
 
-    cmd = ("netconvert --node-files=taichung.nod.xml --edge-files=taichung.edg.xml "
-           "--output-file=taichung.net.xml")
+    here = os.path.dirname(os.path.abspath(__file__))
+    out_abs = os.path.abspath(cli.out_dir)
+    build = ("netconvert --node-files=taichung.nod.xml --edge-files=taichung.edg.xml "
+             "--output-file=taichung.net.xml")
+    check = (f'(cd "{here}" && python export_sumo.py --check-net '
+             f'"{out_abs}/taichung.net.xml" --out-dir "{out_abs}"')
     with open(os.path.join(cli.out_dir, "build_net.sh"), "w", encoding="utf-8") as f:
-        f.write(f"#!/bin/sh\n# one command; ids come from our CSVs so nothing has to be "
-                f"mapped\n{cmd}\n")
+        f.write(f"#!/bin/sh\n"
+                f"# Two passes. Ids come from our CSVs so nothing has to be mapped; the\n"
+                f"# check compares every turn the graph allows with what netconvert built\n"
+                f"# and, only if something is missing, rebuilds with a fix file and\n"
+                f"# checks again (module docstring: CONNECTIONS CHECK).\n"
+                f"set -e\n"
+                f"{build}\n"
+                f"{check})\n"
+                f"if [ -s taichung.fix.con.xml ]; then\n"
+                f"    {build.replace('--output-file', '--connection-files=taichung.fix.con.xml --output-file')}\n"
+                f"    {check} --strict)\n"
+                f"fi\n")
     with open(os.path.join(cli.out_dir, f"{cli.tag}.sumocfg"), "w", encoding="utf-8") as f:
         f.write('<configuration>\n  <input>\n'
                 '    <net-file value="taichung.net.xml"/>\n'
@@ -267,7 +439,9 @@ def main():
     print(f"\nalso wrote: build_net.sh, {cli.tag}.sumocfg, {cli.tag}_summary.json, "
           f"and one *.load.json per policy\n  (edge -> vehicles/rho, which is what makes "
           f"the herding effect visible; usable without SUMO)")
-    print(f"\nnext, in {cli.out_dir}/ :\n    sh build_net.sh\n    sumo-gui -c {cli.tag}.sumocfg")
+    print(f"\nnext, in {cli.out_dir}/ :\n    sh build_net.sh      # netconvert, then the "
+          f"turn check, then a rebuild only if a turn is missing\n"
+          f"    sumo-gui -c {cli.tag}.sumocfg")
 
 
 if __name__ == "__main__":

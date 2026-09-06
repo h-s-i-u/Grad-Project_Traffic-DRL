@@ -1054,8 +1054,21 @@ disclosed with its numbers. It is not correct to say rainfall has no effect.
       blamed `netconvert`'s turn guessing and added explicit connections to the export;
       an offline probe showed the router never emits a closed edge, and the change was
       reverted)
-- [ ] Third self-test — `setRoute-failed 0` with no permission change, mid-junction cars
-      re-routed on exit, no stale-subscription errors
+- [x] Third self-test (7 Sep) — `setRoute-failed 0` with no permission change,
+      mid-junction cars re-routed on exit, no stale-subscription errors. SUMO's log
+      showed one car braking to a stop at a lane end: a route legal for the edge but not
+      reachable from the car's lane so close to the junction. Such cars are now deferred
+      past the junction, with `--time-to-teleport.disconnected` as the counted safety
+      valve
+- [x] Fourth self-test (7 Sep) — `teleported 0`, every deferred car re-routed. The GUI
+      then showed the network drawn as straight chords and one genuine missing turn:
+      measured against the built `.net.xml`, 6 of the graph's 2,767 turns did not exist,
+      all same-road continuations on sharp bends that `netconvert` had filed as U-turns.
+      `export_sumo.py` now writes the recovered road shapes (3 of the 6 gaps close on
+      their own) and `build_net.sh` checks every turn against the graph, rebuilding with
+      a fix file that restates every turn of the few incoming edges that still have one
+- [ ] Fifth self-test on the shaped, checked network — `setRoute-failed 0`, roads drawn
+      along their real course in `sumo-gui`
 - [ ] Mode B: SUMO's state as the agent's observation rather than the BPR model. Needs a
       retrain, and it is the only experiment that could show policy 7 earning its place
       against the analytic oracle
