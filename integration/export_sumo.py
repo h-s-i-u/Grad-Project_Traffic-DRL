@@ -291,6 +291,11 @@ def main():
     ap.add_argument("--capacity-scale", type=float, default=None)
     ap.add_argument("--close-road", default=None, metavar="PREFIX")
     ap.add_argument("--close-at", type=float, default=0.5, metavar="FRAC")
+    ap.add_argument("--beam", type=int, default=0, metavar="W",
+                    help="decoding width for policy 7. 0 = greedy, which is what the live "
+                         "demo runs (13.9 ms/vehicle); 8 is what the report quotes for "
+                         "quality and what the replay validation (run_sumo_compare.py) "
+                         "must use to compare against the reported row")
     ap.add_argument("--shapes", default=DEFAULT_SHAPES, metavar="JSON",
                     help="real road shapes from demo/build_geometry.py, written as each "
                          "edge's `shape` (module docstring: SHAPES). Default: the "
@@ -363,11 +368,13 @@ def main():
             with open(meta_path, encoding="utf-8") as f:
                 togo = int(json.load(f).get("togo_refresh", 0) or 0)
         agent = pol.make_drl_agent(cli.drl, g)
-        # Greedy, not beam-8. The report quotes beam-8 for quality, but greedy is what
-        # runs in 13.9 ms/vehicle and keeps a live booth responsive (§13.25 ②). Label the
-        # demo accordingly rather than quoting the report's numbers over it.
+        # Greedy by default: that is what runs in 13.9 ms/vehicle and keeps a live booth
+        # responsive (§13.25 ②). The report quotes beam-8 for quality, so a replay meant
+        # to be read against the reported row passes --beam 8; label whichever is used
+        # rather than quoting the report's numbers over a greedy run.
         routed["7_drl"] = pol.policy_drl(g, demand, agent, max_hops=max_hops,
-                                         togo_refresh=togo, closure=closure)
+                                         togo_refresh=togo, closure=closure,
+                                         beam=cli.beam)
 
     print(f"\nroutes:")
     ref = set()
@@ -432,7 +439,9 @@ def main():
                    "closure": (None if not closure else
                                {"label": closure.label, "edges": len(closure),
                                 "at_fraction": cli.close_at, "at_seconds": close_time}),
-                   "decoding": "greedy (not beam-8) -- see the note in the source",
+                   "decoding": (f"beam-{cli.beam}" if cli.beam > 1 else
+                                "greedy (not beam-8) -- see the note in the source"),
+                   "beam": cli.beam,
                    "policies": summary, "projection": proj}, f,
                   indent=2, ensure_ascii=False)
 

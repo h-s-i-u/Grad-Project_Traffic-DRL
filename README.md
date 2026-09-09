@@ -285,8 +285,20 @@ python app.py --drl ../integration/checkpoints/taichung/drl_fusion_togo25.pt
 
 Two panes over identical demand — the herding baseline and the trained agent — with the
 arena's edges coloured by load / capacity and buttons that shut a road and make both
-sides re-plan. **No simulator required**; SUMO later replaces one class behind the same
-five-method `Backend` interface, and neither the server nor the page changes.
+sides re-plan. **No simulator required.** With SUMO installed, the same page drives one
+SUMO instance per pane instead (`demo/controller.py`, the second implementation of the
+five-method `Backend`; neither the server nor the page changes):
+
+```bash
+pip install eclipse-sumo traci sumolib
+(cd ../integration && python export_sumo.py --drl checkpoints/taichung/drl_fusion_togo25.pt \
+    && cd sumo && sh build_net.sh)                          # network + turn check, once
+python controller.py --selftest --drl ../integration/checkpoints/taichung/drl_fusion_togo25.pt
+DEMO_SUMO_GUI=1 python app.py --backend sumo --drl ../integration/checkpoints/taichung/drl_fusion_togo25.pt
+```
+
+The replay validation — the reported assignments driven headless in SUMO and scored — is
+`integration/run_sumo_compare.py`; see "Replayed in SUMO" under Results.
 
 Each pane is a batch assignment of 800 vehicles, because eq. 4 couples vehicles through
 the load they leave behind and that coupling is the only place the policies differ.
@@ -970,6 +982,60 @@ suppression, on only 17 hours of data. The overall effect (~0.66 km/h) is far be
 models' own MAE (3.47 km/h), so the feature was **not integrated** and the decision is
 disclosed with its numbers. It is not correct to say rainfall has no effect.
 
+### Replayed in SUMO: the spread transfers, the time saving does not
+
+The assignments behind the table above were driven, vehicle by vehicle, in SUMO
+(`integration/run_sumo_compare.py`): same demand generator, same ten seeds, the same
+corridor closure at 10% of the dispatch, beam-8 for policy 7, departures spread over the
+154 s that `capacity_scale` implies (600 s as the sensitivity case). SUMO replays each
+policy's routes and measures. Paired deltas against the herding baseline, 10 seeds:
+
+| | S2, 154 s | S2, 600 s | S3, 154 s | S3, 600 s | BPR (the table above) |
+|---|---:|---:|---:|---:|---:|
+| **7 DRL, ATT** | **+3.6 ± 0.9%** | +6.8% | +4.2% | +7.0% | **−36.0% / −55.8%** |
+| 7 DRL, worst ρ | −15.1% | −22.3% | −28.5% | −24.5% | −24.6% / −27.5% |
+| 7 DRL, Gini | −12.1% | −12.1% | −14.9% | −14.9% | −10.1% / −12.9% |
+| 6 oracle, ATT | +5.1% | +8.9% | +5.6% | +7.8% | −44.0% / −61.2% |
+| **1 static, ATT** | **−3.6%** | −2.3% | −0.7% | −0.8% | worse than herding |
+
+Two of the three effects carry over and one flips. The **spread** does: worst-ρ falls by
+the same order as in the BPR arena. (Gini "carries over" identically in every setting,
+which is an identity rather than a result: total entries per edge are the route counts,
+so any replay reproduces the assignment's Gini.) The **travel-time** saving does not — the
+coordinated policies are 4–9% *slower* than the herding baseline, and free-flow shortest
+paths are the fastest of all. The reason is measured: the busiest edge's ρ is 3.33 in the
+BPR world and 0.84 per 154-s window in SUMO, insertion delay is 0.7 s — at this demand
+the microscopic world is not congested, and a detour taken to spread load is then pure
+cost. `capacity_scale` was calibrated so that congestion *appears* in the BPR arena at
+800 vehicles; it does not make SUMO congested at 800 vehicles. So the ATT figures above
+hold at the saturation the BPR model was calibrated to, and the report has to say so.
+
+A static assignment describes a sustained flow of 800 vehicles per 154 s, not one pulse
+of 800, so the same routes were then replayed for five consecutive periods (S2 only; the
+S3 closure is a one-off event inside the dispatch), with the verdict written down before
+the run: the ATT claim keeps a "sustained peak flow" qualifier if policy 7's delta turns
+negative, and is withdrawn otherwise. Ten seeds, 4,000 vehicles per run:
+
+| sustained, 5 periods | served | served Δ vs herding | ATT Δ, common trips | worst ρ | depart delay |
+|---|---:|---:|---:|---:|---:|
+| 1 static | 78.9% | −2.4 ± 12.3 pp | −1.1 ± 6.4% | 1.054 | 8.2 s |
+| 4 herding | 81.3% (68–100% by seed) | — | — | 1.058 | **11.0 s** |
+| 6 oracle | 92.7% | **+11.4 ± 11.7 pp** (8/10) | **−10.2 ± 5.7%** (10/10) | 1.037 | 3.7 s |
+| **7 DRL** | **97.3%** (100% in 8 seeds) | **+16.0 ± 13.3 pp** (7/10, 2 ties) | +0.7 ± 7.3% (5/10) | 1.075 | 5.4 s |
+
+**The ATT claim is withdrawn.** On the trips every policy completed, policy 7 is level
+with the herding baseline (+0.7 ± 7.3%); it was slower in the single pulse and is not
+faster under sustained flow. What sustained flow *does* show is where the herding cost
+went: 19% of the baseline's trips never arrive within two hours and its departure queue
+is 11 s, while policy 7 delivers 97.3% and the oracle 92.7%. The BPR model prices excess
+demand as very long travel times and every vehicle "arrives"; SUMO prices it as queues
+and gridlock. Travel time cannot be compared across those two worlds — served fraction
+can, and that is the transferable result. Two further caveats: worst-ρ stops
+discriminating once saturated (every policy sits at 1.05, because entries per window are
+capped by the road's physical throughput — the assignment's ρ of 3.33 can never appear
+as flow), and the seed-to-seed spread is wide (±12 pp; in one seed policy 7 gridlocked
+too). Details, per-seed numbers and the pre-registered rule: log 13.30–13.31.
+
 ## Status & roadmap
 
 **Prediction (Track A)**
@@ -1069,6 +1135,17 @@ disclosed with its numbers. It is not correct to say rainfall has no effect.
       a fix file that restates every turn of the few incoming edges that still have one
 - [ ] Fifth self-test on the shaped, checked network — `setRoute-failed 0`, roads drawn
       along their real course in `sumo-gui`
+- [x] **Replay validation in SUMO (mode A)** — the report's S2 and S3 assignments,
+      beam-8, 10 seeds, replayed headless and scored from `tripinfo` and `edgeData`
+      (`integration/run_sumo_compare.py`, `sumo_metrics.py`). **The spread transfers
+      (worst-ρ −15 to −29%), the ATT saving flips sign (+4 to +9%)**: at 800 vehicles
+      the microscopic world is not congested (busiest edge ρ 0.84 vs 3.33 in BPR), so a
+      detour is pure cost. See "Replayed in SUMO" under Results
+- [x] Sustained-demand replay — the same routes over five periods of 154 s, verdict
+      pre-registered. **The ATT claim is withdrawn** (policy 7 level with herding on the
+      common trips, +0.7 ± 7.3%). The herding cost appears as gridlock instead: the
+      baseline delivers 81% of trips in two hours, policy 7 delivers 97% (+16 ± 13 pp
+      paired), the oracle 93% and is the only policy faster on time (−10%)
 - [ ] Mode B: SUMO's state as the agent's observation rather than the BPR model. Needs a
       retrain, and it is the only experiment that could show policy 7 earning its place
       against the analytic oracle

@@ -84,6 +84,33 @@ python search_ensemble_weight.py --n-pred 12 --split test
 | `search_ensemble_weight.py` | fixed-weight sweep + error correlation |
 | `taichung_pred_edges.csv` | per-edge speeds — what the router consumes (`.meta.json` records its source) |
 | `data/adj_mx_dijsk.pkl` | vendored METR-LA adjacency |
+| `reroute_service.py` | the resident router the live demo calls: `reroute()` for cars in motion, `plan()` for a whole fleet, `network_state()` for the panel; `policies.py` untouched |
+| `export_sumo.py` | arena + routed vehicles as SUMO inputs. Edge ids are `<from_osmid>_<to_osmid>` on both sides; real road shapes from `demo/arena_geometry.json`; `--check-net` compares every turn the graph allows with the built `.net.xml` (`build_net.sh` is two-pass) |
+| `run_sumo_compare.py` | **replay validation (mode A)**: the report's S2/S3 assignments, beam-8, 10 seeds, replayed headless in SUMO and scored |
+| `sumo_metrics.py` | ATT / served / worst-ρ / Gini from `tripinfo` and `edgeData`, defined as the report defines them; paired deltas vs the herding baseline |
+
+### SUMO replay validation (mode A)
+
+```bash
+python export_sumo.py --drl checkpoints/taichung/drl_fusion_togo25.pt     # network + shapes, once
+(cd sumo && sh build_net.sh)                                              # netconvert + turn check
+python run_sumo_compare.py --drl checkpoints/taichung/drl_fusion_togo25.pt
+```
+
+Assignments are made exactly as `run_compare.py` makes them (same demand generator,
+seeds 42–51, S3 = 臺灣大道 closed at 10% of the dispatch, beam-8 for policy 7); SUMO
+replays each policy's routes and measures. Departures are spread over 154 s — the demand
+period `capacity_scale` implies (實驗設計 §4.4) — with 600 s as the sensitivity case;
+routes are exported once per seed and the second window rescales the departure times.
+Output: one table per scenario × window in `sumo_a/`, plus `results.json`. Absolute values
+are not comparable with the BPR-side numbers (the assignment puts every vehicle on the
+road at once); the paired deltas against the herding baseline are. Resumable: finished
+exports and runs are skipped.
+
+`--periods K` replays the same routes K times, each period one window later (S2 only):
+a static assignment describes a sustained flow, and one pulse of 800 vehicles disperses
+before it reaches the busy edges. `sumo_metrics.py` then scores the middle periods
+separately (`ATT mid`, `served mid`).
 
 ---
 
