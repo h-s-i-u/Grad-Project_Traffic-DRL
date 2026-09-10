@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
 """Export the arena and a set of routed vehicles as SUMO input files.
 
-This is the downstream half of the SUMO integration ("mode A" in
-paper_work/交接_SUMO_20260831.md): the routing decisions are made here, under the BPR
-congestion model, and SUMO replays and renders them. Nothing in the output needs PyTorch,
-so whoever runs SUMO never has to install torch_geometric.
+This is the downstream half of the SUMO integration: the routing decisions are made here,
+under the BPR congestion model, and SUMO replays and renders them. Nothing in the output
+needs PyTorch, so whoever runs SUMO never has to install torch_geometric.
 
 WHY THE NETWORK IS EXPORTED TOO, NOT JUST THE ROUTES
     Map/arena_{nodes,edges}_taichung.csv already carry everything netconvert needs --
     coordinates, length, speed limit, lane count, one-way, all with zero missing values.
     Building the .net.xml from them rather than re-extracting OSM means WE choose the edge
-    ids, so the "my node/edge id <-> SUMO edge id" mapping table that the June handover
-    left open for two months simply does not exist: an edge is `<from_osmid>_<to_osmid>`
-    on both sides, and the correspondence is the identity.
+    ids, so the "my node/edge id <-> SUMO edge id" mapping table that stayed open for two
+    months simply does not exist: an edge is `<from_osmid>_<to_osmid>` on both sides, and
+    the correspondence is the identity.
 
 COORDINATES
     Node positions are projected to metres with a local equirectangular projection about

@@ -19,8 +19,8 @@ sys.path.insert(0, str(HERE.parent / "integration"))
 import config as C                                                    # noqa: E402
 import network as net                                                 # noqa: E402
 
-# Left pane vs right pane. 4 and 7 side by side ARE the demo (handover 5.3); 6 is a
-# dashed theoretical bound and does not belong on screen as a competitor (5.4).
+# Left pane vs right pane. 4 and 7 side by side ARE the demo; 6 is a dashed
+# theoretical bound and does not belong on screen as a competitor.
 #
 # Keys and policy numbers only -- no display strings. Which panes EXIST is a backend fact
 # (there is no policy 7 without a checkpoint); what they are CALLED is not, and a React

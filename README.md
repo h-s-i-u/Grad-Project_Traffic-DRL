@@ -26,11 +26,25 @@ The system has three modules (proposal §4):
    over-saturating any link and rewards spreading load evenly.
 3. **Visualization** — a web dashboard in [`demo/`](demo/) that puts the herding baseline
    and the trained agent side by side and lets a road be shut at runtime. It runs
-   without a simulator; SUMO slots in behind the same interface (see Roadmap).
+   without a simulator; SUMO slots in behind the same interface, one instance per pane.
 
 The fusion model lives in [`fusion/`](fusion/); everything that connects prediction →
 decision lives in [`integration/`](integration/), which doubles as a standalone
 evaluation harness for the routing policies.
+
+Two findings shape how everything below should be read, and both are negative:
+
+- **Prediction does not change the routing here.** Four independent tests say its
+  marginal contribution is zero, because only 14.1% of the arena *by length* has a TDX
+  sensor behind it. That is a data-availability limit, not a modelling failure — on
+  METR-LA, with full coverage, prediction does move the routes.
+- **The travel-time claim does not survive a microscopic simulator.** The routing
+  decisions were replayed in SUMO, and what carried over was the *spread* (worst-link ρ)
+  and, under sustained flow, the *served fraction* — 81% of trips arriving under the
+  herding baseline against 97% under the agent. ATT did not: at this demand SUMO is not
+  congested by a single burst, and under sustained flow congestion appears as gridlock
+  rather than as delay. Every ATT figure in this README is a BPR-model measurement and
+  is labelled as one.
 
 ### Two datasets, one code path
 
@@ -547,13 +561,17 @@ so the whole table is fed by the model the architecture section describes.
 \* Not comparable: served 82.8% is under the 95% threshold, so those deltas cover an
 easier subset of trips.
 
-Against the proposal's targets, using the beam rows:
+Against the proposal's targets, using the beam rows — and, in the last column, what
+became of each once the same assignments were replayed in SUMO (see "Replayed in SUMO"
+below, and log 13.30–13.31). The BPR figures are real measurements and stay; what changed
+is which of them may be stated without a qualifier:
 
-| metric | target | S2 | S3 |
-|---|---|---:|---:|
-| ATT (burst load) | ↓20–30% | **−36.0%** met | **−55.8%** met |
-| worst-link ρ | ↓20% | **−24.6%** met | **−27.5%** met |
-| Gini(edge load) | ↓30% | −10.1% missed | −12.9% missed |
+| metric | target | S2 | S3 | in SUMO |
+|---|---|---:|---:|---|
+| ATT (burst load) | ↓20–30% | **−36.0%** | **−55.8%** | **withdrawn** — +4 to +9% for a single pulse, level with herding under sustained flow. Quote only as "at the saturation the BPR model was calibrated to" |
+| worst-link ρ | ↓20% | **−24.6%** met | **−27.5%** met | reproduced below saturation (−15 to −29%); above it every policy is capped at 1.05 and the metric stops discriminating |
+| Gini(edge load) | ↓30% | −10.1% missed | −12.9% missed | reproduces identically — an identity of the routes, not SUMO evidence |
+| served, sustained flow | — | — | — | **the result that transfers**: herding delivers 81% of trips in two hours, policy 7 **97%** (+16 ± 13 pp paired), the oracle 93% |
 
 #### Feeding the decision layer from fusion changed nothing measurable
 

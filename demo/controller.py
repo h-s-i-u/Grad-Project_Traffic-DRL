@@ -128,6 +128,12 @@ class _Sim:
             # file name, which carries the pane's key, and the panes tile left to right
             # in the same order as the web page.
             cmd += ["--window-size", "940,1000", "--window-pos", f"{slot * 960},0"]
+            # Colours, widths and background, if they have been saved once from the View
+            # Settings dialog. Without it sumo-gui opens on its defaults -- grey roads,
+            # tiny vehicles -- which is legible up close and useless across a room.
+            view = HERE / "sumo_view.xml"
+            if view.is_file():
+                cmd += ["--gui-settings-file", str(view)]
         traci.start(cmd, label=label)
         self.c = traci.getConnection(label)
         self.label = label
@@ -505,7 +511,9 @@ class SumoBackend(Backend):
 
         DEMO_SUMO_DIR   where export_sumo.py wrote taichung.net.xml (default ../integration/sumo)
         DEMO_SUMO_GUI   1 to open sumo-gui windows instead of headless sumo. One window per
-                        pane, titled live_<key>.sumocfg, tiled left to right like the page.
+                        pane, titled live_<key>.sumocfg, tiled left to right like the page,
+                        and styled from demo/sumo_view.xml when that file exists (save it
+                        once from the View Settings dialog; README has what to set).
                         Its message pane will show "Route replacement failed ...
                         junction-internal edge" lines: those cars are deferred and
                         re-routed a few steps later, not lost.

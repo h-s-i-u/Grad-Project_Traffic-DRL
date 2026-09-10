@@ -184,6 +184,37 @@ snapshot, and nothing below the TraCI line.
 | `DEMO_SUMO_GUI` | `0` | `1` opens two `sumo-gui` windows instead of headless `sumo` |
 | `DEMO_SUMO_STEP` | `1.0` | simulation step length in seconds |
 
+### Making the SUMO windows legible
+
+`sumo-gui`'s defaults are grey roads and vehicles a few pixels wide: fine when you are
+leaning into the screen, useless from across a room. Set it up once and save it as
+`demo/sumo_view.xml`, which `controller.py` passes to every window it opens.
+
+Open the View Settings dialog (the coloured-wheel icon in the toolbar) and set:
+
+| Tab | Setting |
+|---|---|
+| **Streets** | *Color streets by* → **occupancy**; *Exaggerate width by* → 3–5; lane borders and link decals off |
+| **Vehicles** | *Color vehicles by* → **speed**; *Show As* → simple shapes; *Exaggerate by* → 3–5 |
+| **Background** | a dark colour, grid off — the web page is dark and the two want to match |
+
+Then save the scheme to a file (the save icon next to the scheme dropdown) as
+`demo/sumo_view.xml`. Both windows pick it up at their next start. Adding a `<viewport>`
+line to that file makes them open already framed on the arena rather than on the whole
+network:
+
+```xml
+<viewsettings>
+    <viewport zoom="380" x="..." y="..."/>   <!-- Edit -> Edit Viewport shows the numbers -->
+    <scheme name="...">  ...saved by the dialog...  </scheme>
+</viewsettings>
+```
+
+**These colours are not the page's colours.** SUMO's *occupancy* is the fraction of a
+lane covered by vehicles right now; the page's ramp is ρ = entries over the last 154 s
+divided by capacity, a flow ratio (see `sumo_metrics.py`). Both mean "busy" and they
+will not agree edge for edge.
+
 Four things it does differently from `FakeBackend`, on purpose:
 
 1. **Cars are inserted, not placed.** SUMO cannot put a car mid-route, so the route is
@@ -309,18 +340,24 @@ Three things that fail quietly rather than loudly:
 
 ## Offline use
 
-The page loads Leaflet from a CDN, so it needs network access. To remove that:
+The page asks for `/offline/leaflet.js` and `/offline/leaflet.css`. `app.py` serves them
+from `demo/offline/` when the files are there and redirects to the CDN when they are not,
+so a booth machine never touches unpkg and a fresh clone still works:
 
 ```bash
-mkdir -p vendor && cd vendor
+mkdir -p offline && cd offline
 curl -LO https://unpkg.com/leaflet@1.9.4/dist/leaflet.js
 curl -LO https://unpkg.com/leaflet@1.9.4/dist/leaflet.css
 ```
 
-then re-point the two tags at the top of `index.html`. `app.py` checks for these at startup
-and prints the commands if they are missing. Map *tiles* also come from the network; losing
-them leaves the basemap blank while every road still draws, since the polylines come from
-the project's own graph.
+Startup prints which state it is in. The folder is not committed — it is someone else's
+library, and the fallback covers the clone case.
+
+Leaflet is worth this trouble and map tiles are not: if `leaflet.js` fails to load, `L` is
+undefined and the page renders **nothing**, whereas losing tiles leaves the basemap blank
+while every road still draws, since the polylines come from the project's own graph. A
+venue does not have to be offline for a CDN to fail — a blocked domain, a captive portal
+or slow DNS is enough.
 
 ## Replacing the front end
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Web front end for the booth demo -- handover doc section 4.3.
+"""Web front end for the booth demo.
 
     cd demo
     pip install fastapi uvicorn
@@ -12,11 +12,10 @@ WHAT YOU GET WITHOUT SUMO
     agent). Vehicles advance along their routes, edges colour by load / capacity, and a
     visitor shutting a road makes both worlds re-plan under their own policy.
 
-    That is deliberately the whole demo, not a placeholder. The handover doc (5.3) argues
-    the most convincing picture -- two load heat maps diverging on the same closure --
-    needs no simulator at all, and building it this way means a delay in SUMO cannot take
-    the booth down with it. SUMO then upgrades the picture from "coloured edges" to
-    "watch the cars".
+    That is deliberately the whole demo, not a placeholder: the most convincing picture
+    -- two load heat maps diverging on the same closure -- needs no simulator at all, and
+    building it this way means a delay in SUMO cannot take the booth down with it. SUMO
+    then upgrades the picture from "coloured edges" to "watch the cars".
 
 THE SPLIT WITH controller.py
     Everything here talks to a `Backend`. `FakeBackend` below is one implementation;
@@ -47,6 +46,11 @@ from reroute_service import LOAD_WINDOW_S, LoadWindow, Router         # noqa: E4
 # controller.py's SumoBackend gets the SAME trips and the SAME common subset.
 from shared import (PANES, Backend, Funnel, arena_shapes,             # noqa: E402
                     common_subset, plan_all)
+
+# Served from demo/offline/ when present, proxied to the CDN when not -- see the
+# /offline route. Pinned: the page is written against this version's API.
+LEAFLET = "1.9.4"
+VENDORED = ("leaflet.js", "leaflet.css")
 
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -325,10 +329,23 @@ class FakeBackend(Backend):
 
 
 # --------------------------------------------------------------------------- #
+def _port_free(host, port):
+    """Whether uvicorn will be able to bind. SO_REUSEADDR so a socket still in TIME_WAIT
+    from a previous run reads as free, which it is -- only an active listener is not."""
+    import socket
+    with socket.socket() as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind((host, port))
+            return True
+        except OSError:
+            return False
+
+
 def build_app(backend):
     try:
         from fastapi import FastAPI, HTTPException
-        from fastapi.responses import FileResponse
+        from fastapi.responses import FileResponse, RedirectResponse
     except ImportError:
         raise SystemExit("FastAPI is not installed:  pip install fastapi uvicorn")
 
@@ -337,6 +354,26 @@ def build_app(backend):
     @app.get("/")
     def index():
         return FileResponse(HERE / "index.html")
+
+    @app.get("/offline/{name}")
+    def offline(name: str):
+        """Leaflet from demo/offline/ if it is there, from the CDN if it is not.
+
+        The page always asks for /offline/leaflet.js, so a booth with the files present
+        never touches unpkg and a fresh clone without them still works. Leaflet is the
+        one dependency whose failure is TOTAL -- without it `L` is undefined and the page
+        renders nothing -- whereas map tiles failing only leaves the basemap blank, since
+        every road is drawn from our own graph.
+
+        A whitelist, not a path parameter: this reads files off disk by a name that comes
+        from the URL.
+        """
+        if name not in VENDORED:
+            raise HTTPException(404, name)
+        local = HERE / "offline" / name
+        if local.is_file():
+            return FileResponse(local)
+        return RedirectResponse(f"https://unpkg.com/leaflet@{LEAFLET}/dist/{name}")
 
     @app.get("/geometry")
     def geometry():
@@ -392,6 +429,18 @@ def main():
     ap.add_argument("--port", type=int, default=8000)
     cli = ap.parse_args()
 
+    # Checked FIRST, because everything below is slow and some of it is external: the
+    # router loads torch, and --backend sumo starts two simulators and plans an episode
+    # for each, all before uvicorn discovers it cannot bind. A failure there used to
+    # leave two orphaned SUMO processes behind.
+    if not _port_free(cli.host, cli.port):
+        raise SystemExit(
+            f"port {cli.port} is already in use -- most likely an earlier run of this "
+            f"program is\nstill going. Either free it:\n"
+            f"    pkill -f 'python app.py'\n"
+            f"    pgrep -af sumo                # and kill any leftover simulators\n"
+            f"or start on another one:  --port {cli.port + 1}")
+
     print(f"\n{'=' * 78}\nbooth demo -- building the router\n{'=' * 78}")
     router = Router(drl=cli.drl, device=cli.device, beam=cli.beam).warmup()
     if "drl" not in router.available():
@@ -411,16 +460,19 @@ def main():
                               refresh=cli.refresh, episodes=cli.episodes)
     print(f"[demo] backend={cli.backend}, {cli.vehicles} vehicles per pane, "
           f"{cli.speed:g}x speed, panes: {', '.join(router.available())}")
-    # A booth is exactly where the venue wifi fails. Leaflet from a CDN is a single point
-    # of failure for the whole page; map tiles are not (without them the basemap is blank
-    # but every road still draws, because the polylines come from our own graph).
-    if not (HERE / "vendor" / "leaflet.js").is_file():
-        print("[demo] WARNING the page loads Leaflet from unpkg, so it needs internet.\n"
-              "       For the booth, vendor it once and re-point the two tags in "
-              "index.html:\n"
-              "         mkdir -p vendor && cd vendor\n"
-              "         curl -LO https://unpkg.com/leaflet@1.9.4/dist/leaflet.js\n"
-              "         curl -LO https://unpkg.com/leaflet@1.9.4/dist/leaflet.css")
+    # A booth is exactly where the venue wifi fails, and it need not fail completely to
+    # take Leaflet down: a blocked CDN, a captive portal or slow DNS is enough, and then
+    # `L` is undefined and the page renders nothing. Map tiles are not like that --
+    # without them the basemap is blank but every road still draws.
+    missing = [f for f in sorted(VENDORED) if not (HERE / "offline" / f).is_file()]
+    if missing:
+        print(f"[demo] WARNING {', '.join(missing)} not in demo/offline/, so the page "
+              f"falls back to\n       unpkg and needs the internet. For a booth:\n"
+              f"         mkdir -p offline && cd offline\n"
+              + "".join(f"         curl -LO https://unpkg.com/leaflet@{LEAFLET}/dist/{f}\n"
+                        for f in missing))
+    else:
+        print("[demo] Leaflet served from demo/offline/ -- the page needs no CDN")
     print(f"[demo] open  http://{cli.host}:{cli.port}\n")
 
     import uvicorn

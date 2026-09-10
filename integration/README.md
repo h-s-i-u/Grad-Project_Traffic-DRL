@@ -241,15 +241,20 @@ within one run.
 
 **METR-LA, hotspot, 300 vehicles** — Δ vs the herding baseline: ATT **−33.7%**,
 worst-link ρ **−93.0%**, Gini **−35.0%**, clearing all three of the proposal's targets.
+That is the *similarity graph*, not a road network: 76 neighbours per node against
+Taichung's 2.01, which is why its numbers are so much larger and why they say nothing
+about the arena below.
 
-**Taichung, 800 vehicles, 10 demand draws, beam-8 decoding:**
+**Taichung, 800 vehicles, 10 demand draws, beam-8 decoding.** These are BPR-model
+measurements; the last column is what survived being replayed in SUMO (`sumo_metrics.py`,
+`run_sumo_compare.py`):
 
-| Δ vs herding baseline | S2 (rush-hour funnel) | S3 (arterial closure) | target |
-|---|---:|---:|---|
-| ATT | **−36.0±7.9%** | **−55.8±5.6%** | ↓20–30% — met |
-| worst-link ρ | **−24.6±2.0%** | **−27.5±2.9%** | ↓20% — met |
-| Gini(edge load) | −10.1±0.6% | −12.9±0.8% | ↓30% — missed |
-| served% | 99.9±0.2 | 96.0±1.8 | ≥95% — met |
+| Δ vs herding baseline | S2 (rush-hour funnel) | S3 (arterial closure) | target | in SUMO |
+|---|---:|---:|---|---|
+| ATT | **−36.0±7.9%** | **−55.8±5.6%** | ↓20–30% | **withdrawn** — see below |
+| worst-link ρ | **−24.6±2.0%** | **−27.5±2.9%** | ↓20% — met | reproduced below saturation |
+| Gini(edge load) | −10.1±0.6% | −12.9±0.8% | ↓30% — missed | an identity of the routes |
+| served% | 99.9±0.2 | 96.0±1.8 | ≥95% — met | **81% → 97% under sustained flow** |
 
 Gini falls short — and so does the oracle (−18.1% / −17.4%), which places that gap in
 the scenario rather than in training. On METR-LA the ceiling was −50.7% and the agent
@@ -263,6 +268,31 @@ seed-to-seed variance (±2.1%). Whichever forecast you follow, greedily chasing 
 predicted-fastest road herds just as badly — the improvement comes from *coordination*
 and the *global penalty*, not from prediction quality. That is the project's central
 claim, isolated about as cleanly as it can be.
+
+### Replayed in SUMO
+
+`run_sumo_compare.py` drives the same assignments, vehicle by vehicle, in a microscopic
+simulator — a world whose cost function is not the one any policy was built on. Ten
+seeds, paired against the herding baseline:
+
+| | single pulse of 800 | sustained: the same fleet every 154 s, 5 periods |
+|---|---:|---:|
+| policy 7, served | 99.9% | **97.3%** (herding 81.3%, oracle 92.7%) |
+| policy 7, served Δ | — | **+16.0 ± 13.3 pp** (oracle +11.4 ± 11.7) |
+| policy 7, ATT Δ (common trips) | +3.7 ± 1.0% | +0.7 ± 7.3% (oracle **−10.2 ± 5.7%**) |
+| policy 7, worst-ρ Δ | −15.1 ± 10.9% | +1.6 ± 1.5% |
+
+**The spread transfers; the travel-time saving does not.** A single pulse of 800 vehicles
+never congests the microscopic world — the busiest edge sits at ρ 0.84 per window against
+the assignment's 3.33, because departures spread out before they reach it — so a detour
+taken to spread load is pure cost and free-flow shortest paths are the fastest of all.
+Under sustained flow congestion does appear, but as *gridlock rather than delay*: nearly
+a fifth of the herding baseline's trips never arrive within two hours, while policy 7
+delivers 97% of them. Travel time is not comparable across the two worlds; served
+fraction is, and it is the result that carries over. worst-ρ discriminates only below
+saturation (above it every policy is capped near 1.05 by physical throughput), and Gini
+reproduces identically in every setting because total entries per edge *are* the route
+counts — an identity, not evidence.
 
 ---
 

@@ -126,6 +126,10 @@ paper_work/*
 # =========================
 # Screenshots are megabytes each and git keeps them forever.
 demo/*.png
+# Leaflet, fetched once for the booth so the page does not depend on a CDN resolving.
+# Not committed: it is someone else's library, and app.py falls back to the CDN when the
+# folder is absent, so a fresh clone still works.
+demo/offline/
 demo/vendor/
 # ...but the recovered road shapes have to ship. They are 169 KB, deterministic, and
 # demo/build_geometry.py CANNOT regenerate them from a fresh clone: it reads

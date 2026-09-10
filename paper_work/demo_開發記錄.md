@@ -5,7 +5,7 @@
 > - `capacity_scale` 隱含 154 秒觀測窗、ρ 是流量比 → `實驗設計.md` **§4.4**
 >
 > **相關**：`demo/README.md`（英文，程式介面與端點契約）。
-> SUMO 那一側的交接文件（`交接_SUMO_20260831.md`）未隨版本庫發布，本文件已把用得到的論證直接寫入
+> SUMO 那一側的整合構想原本只在組內的文件裡，本文件已把用得到的論證直接寫入
 >
 > 【必讀】**這個頁面上的任何數字都不是結果。** 報告的正式數字一律由 `run_compare.py` 產生。
 >
@@ -153,7 +153,7 @@ arena_*        同上（52.5%，其餘是真的單行）
 | **Canvas 而非 SVG** | 每秒重上色 1,690 條 polyline × 2 格，SVG renderer 撐不住。且只重繪飽和度真的變了的邊 |
 | **`--vehicles` 預設 800** | `capacity_scale = 0.0429` 是對 800 車校準的。300 車時沒有一條邊跨過 `RHO_THRESHOLD = 0.85`，eq.4 的飽和項恆為 0，**兩格會長得一樣** |
 | **`--episodes N`** | 跑完 N 回合停在最後一幀。攤位要 0（一直跑），但要把 served% 拿去和報告對讀就得用 1 |
-| **離線攤位** | 頁面從 CDN 載 Leaflet，沒網路整頁死掉。`app.py` 啟動時檢查 `vendor/leaflet.js` 並印出 vendoring 指令。圖磚掉了不要緊——底圖空白但所有道路照常畫，polyline 來自我們自己的圖 |
+| **離線攤位** | 頁面若從 CDN 載 Leaflet，CDN 不通就整頁死掉。**09-10 改為由 `app.py` 供應、缺檔才轉址 CDN**（§10.1）。圖磚掉了不要緊——底圖空白但所有道路照常畫，polyline 來自我們自己的圖 |
 
 ---
 
@@ -178,9 +178,26 @@ arena_*        同上（52.5%，其餘是真的單行）
 |---|---|
 | `demo/app.py`、`index.html`、`build_geometry.py`、`arena_geometry.json` | 完成 |
 | `demo/shared.py` | 完成（09-04）：兩個 backend 共用的契約與需求產生器（§9） |
-| `demo/controller.py`（`SumoBackend`） | **已寫（09-04），mock 自測通過；【必讀】尚未在真的 SUMO 上跑過**——這台機器沒裝。§9 列出實機自測要確認的四個假設 |
+| `demo/controller.py`（`SumoBackend`） | **完成**：mock 自測 + 實機自測四次通過（§9.4–§9.7）。09-07 起網已帶真實路形並對過帳（§9.8），**第五次自測（新網上）待跑** |
+| `demo/offline/`（Leaflet） | **完成**（09-10，§10.1）。資料夾不進版控，缺檔時 `app.py` 轉址到 CDN |
 | React 版 | 待做。API 已框架無關，換前端只動 `index.html` 加 `app.py` 兩行 |
-| 攤位前要做 | vendoring Leaflet；用 `--episodes 1` 對一次數字；決定 `--speed` 與 `--refresh`；情境圖層（實驗記錄 §18.5 Q，未定案） |
+
+### 7.1 攤位前的清單（09-10）
+
+| # | 項目 | 狀態 | 誰 |
+|---|---|---|---|
+| 1 | Leaflet 離線化 | **完成**（§10.1）；剩「開一次頁面確認地圖有畫出來」 | 本人 |
+| 2 | **第五次實機自測**（在帶路形、對過帳的網上） | 待跑。看 `rejected` / `setRoute-failed` / **`teleported`** / `gone` / `remove-failed` 皆為 0，結尾 `still to retry 0`。**`teleported` 最值得看**——真實路形改變路口幾何，`LANE_CHANGE_M = 50` 的表現可能與第四次不同（§9.7） | 本人 |
+| 3 | `--episodes 1` 對一次數字 | 待跑：把頁面的 served% 與報告對讀（§6 說明為何只能比比值） | 本人 |
+| 4 | `--speed` / `--refresh` 定案 | 待試。GUI 版建議 `--speed 2`（預設 5 看不清楚） | 本人 |
+| 5 | `demo/sumo_view.xml` | 待存（§10.2）。存了 sumo-gui 才會自動套用配色 | 本人 |
+| 6 | 攤位機器裝 SUMO + 建網 | 待辦。跑不起來就退回 `--backend fake`，網頁完全一樣 | 江彥萱 |
+| 7 | 情境定案（TDX 網格圖層要不要疊） | **未決**（實驗記錄 §18.5 Q）。要做約 30 行 JS | 全體 |
+| 8 | 【必讀】**講稿要改**：ATT −36% 已撤下 | 待辦。攤位要講的是「羊群基準送不到 19%、⑦ 送到 97%」＋「負載分散在微觀模擬中重現」（實驗記錄 §13.31） | 全體 |
+
+**口試的重播畫面不在這裡**：那是 `integration/sumo_a/`（10 seeds、beam-8 的實跑，表格裡的每一列），
+指令見實驗記錄 §16.8。`integration/sumo/` 只是建網用的目錄，裡面那份 299 台車、貪婪解碼的
+範例**不是報告的數字**。
 
 ---
 
@@ -456,3 +473,57 @@ from any incoming edge`）。改成每條有缺的進入邊列全部轉向：3 �
 這版只碰量到有缺的 3 條進入邊。有了真實路形，第一段的缺口從 6 降到 3（英才路 5520565628、
 民權路 5521014889 與 3285467668）。第五次實機看：第一段 missing 3、第二段 missing 0；
 `setRoute-failed 0`；GUI 上路是路。
+
+---
+
+## 10. 攤位的三個工程決定（09-10）
+
+### 10.1 Leaflet 離線化：轉址而不是寫死
+
+頁面向 `/offline/leaflet.js` 與 `/offline/leaflet.css` 要檔案；`app.py` 的
+`GET /offline/{name}`：**檔案在 `demo/offline/` 就給本機的，不在就 302 轉到 CDN。**
+
+**為什麼是 Leaflet 而不是圖磚**——這兩件事壞掉的後果差很多：
+
+| | 來源 | 掛掉會怎樣 |
+|---|---|---|
+| **Leaflet 函式庫** | unpkg.com | `L` 是 undefined，腳本第一行就爆 → **整頁空白** |
+| 地圖圖磚 | tile.openstreetmap.org | 底圖空白，**所有道路照常畫**（polyline 來自我們自己的圖） |
+
+而且**會場有網路不等於 CDN 通**：擋特定網域、captive portal、DNS 慢，任一個就夠了，
+後果是全毀而不是降級。圖磚不值得這樣處理，Leaflet 值得。
+
+**為什麼做成轉址、不直接把 tag 寫死指向本機**：寫死的話別人 clone 下來沒有 `offline/`
+就整頁空白。現在兩種情況都能跑，攤位那台有檔案就完全不碰網路。
+`demo/offline/` 不進版控（是別人的函式庫，且有 fallback）；版本 pin 在 `app.py` 的
+`LEAFLET = "1.9.4"`，路由用白名單只認那兩個檔名（路徑來自 URL，不能讓它讀任意檔案）。
+
+啟動訊息會講在哪個狀態：`Leaflet served from demo/offline/ -- the page needs no CDN`，
+或缺哪個就印哪個的 curl。
+
+### 10.2 sumo-gui 的外觀存成檔案
+
+`sumo-gui` 預設是灰色的路 + 幾個像素寬的車：湊近看沒問題，隔一張桌子就看不出東西。
+設定存成 `demo/sumo_view.xml`，`controller.py` 開視窗時自動帶 `--gui-settings-file`。
+
+要設的（View Settings 對話框，工具列的彩色輪盤）：Streets 分頁 *Color streets by* →
+**occupancy**、*Exaggerate width by* 3–5、lane borders 與 link decals 關掉；Vehicles 分頁
+*Color vehicles by* → **speed**、*Exaggerate by* 3–5；Background 深色。存檔後可手動加一行
+`<viewport zoom x y/>`，兩個視窗就會一開就對準場域。
+
+【但書】**SUMO 的顏色不等於網頁的顏色。** SUMO 的 *occupancy* 是「這條車道現在被車佔了
+多少比例」（瞬時）；網頁的色階是 ρ =「過去 154 秒的進入數 ÷ 容量」（流量比，見
+`sumo_metrics.py`）。兩個都在講「忙」，但**逐條邊不會一致**——講解時不可當成同一個量。
+
+XML 由對話框存、不由我們手寫：屬性名與魔術數字（`laneEdgeMode` 之類）在 SUMO 版本之間會變，
+寫錯是靜默忽略。
+
+### 10.3 port 檢查提前到最前面
+
+原本的順序是「建 router → 起兩個 SUMO → 派第一回合 800 台車 → 才綁 port」。
+port 被上一次的 `app.py` 佔著時，要等十幾秒才失敗，**而且那兩個 SUMO 已經起來、變成孤兒**。
+現在 `main()` 一開始就試綁一次（`SO_REUSEADDR`，所以 TIME_WAIT 的 socket 算「空的」，
+只有真的在 listen 才算佔用），佔用就立刻停並印出 `pkill` 指令與 `--port` 的建議。
+
+**這是「先做便宜的檢查」的同一類**：與 `--n-pred` 檔名守門（實驗記錄 §13.4）、
+`test_beam.py` 的寬度 1 等價測試同理——**會失敗的事要在昂貴的準備之前失敗。**

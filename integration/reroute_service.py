@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Resident router for the interactive demo -- mode A' of the SUMO handover doc, section 4.
+"""Resident router for the interactive demo: we route, SUMO drives and renders.
 
 WHAT THIS IS
     One long-lived object holding the road graph and the trained agent, answering a
@@ -43,7 +43,7 @@ IT DOES NOT MODIFY policies.py, AND MOSTLY DOES NOT REPLACE IT EITHER
     run, so a change to eq.4 fails loudly here instead of letting the demo and the report
     drift apart.
 
-THE CONTRACT  (handover doc section 4.2 -- both sides speak SUMO edge ids)
+THE CONTRACT  (both sides speak SUMO edge ids, so nothing has to be mapped)
 
     controller -> Router
         reroute(active, closed)                                 what to compute
@@ -90,9 +90,8 @@ WHY THE ROUTER DOES NOT READ SUMO'S LOAD
     2. The model has no clock, so the two quantities cannot be added. Offline, load[e] is
        one consistent thing: traversals of e over the study period. Seeding adds SUMO's
        "entries in the last ~154 s" to an assignment covering each vehicle's whole
-       remaining trip (~500 s) -- two different spans summed as if they were one. That is
-       the granularity mismatch the handover flagged in section 3.2, and it does not have
-       a clean fix at this level; it has one in mode B, where SUMO's state becomes the
+       remaining trip (~500 s) -- two different spans summed as if they were one. That granularity
+       mismatch has no clean fix at this level; it has one in mode B, where SUMO's state becomes the
        agent's observation and the BPR model goes away entirely.
 
     What is given up: the router reacts to the NETWORK changing (a visitor shutting a
@@ -122,7 +121,7 @@ WHAT `load` HAS TO MEAN  (it still matters -- the displayed rho is compared to r
     `LoadWindow` below maintains the right quantity from per-step observations.
 
     Honest caveat: 0.0429 was calibrated to land the herding baseline at a target
-    worst-rho for 800 vehicles (handover doc section 6, item 4), not derived from a
+    worst-rho for 800 vehicles, not derived from a
     window. 154 s is therefore the window that scale IMPLIES, and it moves if the demo
     changes the vehicle count and recalibrates.
 """
@@ -155,8 +154,8 @@ except (AttributeError, ValueError):
 # Seconds of edge entries that `load` should count. See the module docstring.
 LOAD_WINDOW_S = 3600.0 * C.TAICHUNG_CAPACITY_SCALE
 
-# Policies worth exposing live. 4 and 7 side by side ARE the demo (handover 5.3);
-# 6 belongs on screen as a dashed upper bound, not as a competitor (handover 5.4).
+# Policies worth exposing live. 4 and 7 side by side ARE the demo; 6 belongs on screen
+# as a dashed upper bound, not as a competitor.
 POLICIES = ("static", "herding", "oracle", "drl")
 
 # 臺灣大道一段 -> 臺灣大道. Both Chinese numerals and digits appear in OSM name tags.
@@ -361,7 +360,7 @@ class Router:
         # 🔴 make_drl_agent loads with map_location="cpu" and leaves it there. Offline
         # that is a choice; at a booth it is a 1.5x latency penalty nobody asked for --
         # 21.5 ms/vehicle against 13.9 (log 13.25), so 800 vehicles is 17 s instead of
-        # 11. Nothing errors, the demo is just slower than the number in the handover.
+        # 11. Nothing errors, the demo is just slower than it has any need to be.
         if self.device is None:
             self.device = ("cuda" if pol.torch.cuda.is_available() else "cpu")
         if self.device != "cpu":
@@ -414,7 +413,7 @@ class Router:
     def roads(self, limit=12, min_edges=4):
         """Closable roads for the touch panel, with what each one would sever.
 
-        sumo-gui has no API for clicking the canvas to shut a road (handover 4.5), so the
+        sumo-gui has no API for clicking the canvas to shut a road, so the
         visitor picks from a short list. `scc_frac` is the share of the arena still
         strongly connected afterwards: below ~0.85 the closure demolishes the network
         rather than diverting it, and every policy's served% collapses for a reason that
@@ -422,8 +421,8 @@ class Router:
 
         WHOLE CORRIDORS ARE INCLUDED, not just segments. The arena names roads per
         segment (臺灣大道一段 … 四段), so grouping by the raw name offers the visitor
-        `臺灣大道四段` and never `臺灣大道` -- and the whole corridor IS the demo (handover
-        5.2). Aggregates are marked `corridor`; `road_edges()` takes either, since it
+        `臺灣大道四段` and never `臺灣大道` -- and the whole corridor IS the demo.
+        Aggregates are marked `corridor`; `road_edges()` takes either, since it
         matches by prefix.
 
         🔴 THE ORDER HERE MEANS NOTHING. Rows are sorted by edge count because something
