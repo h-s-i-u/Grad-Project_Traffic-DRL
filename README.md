@@ -826,17 +826,18 @@ units.
 
 | | best epoch | epochs run | 15 min | 30 min | 60 min |
 |---|---:|---:|---:|---:|---:|
-| from scratch (A2), original unseeded run | 23 | 64 | 3.3802 | 3.5127 | 3.6276 |
+| from scratch (A2), original unseeded run | 19 | 60 | 3.3802 | 3.5127 | 3.6276 |
 | from scratch, `--seed 1` / `2` / `3` | 21 / 25 / 14 | 62 / 66 / 55 | 3.3819 / 3.4114 / 3.4201 | 3.5072 / 3.5452 / 3.5363 | 3.6180 / 3.6372 / 3.6248 |
-| **from scratch, four draws** | **14–25 (20.8 ± 4.8)** | | **3.398 ± 0.020** | **3.525 ± 0.018** | **3.627 ± 0.008** |
+| **from scratch, four draws** | **14–25 (19.8 ± 4.6)** | | **3.398 ± 0.020** | **3.525 ± 0.018** | **3.627 ± 0.008** |
 | **fine-tuned from the transfer** (one run) | **7** | 47 | 3.4137 | 3.5304 | **3.6510** |
 
 The best epoch arrives at **7, below the lowest of four from-scratch draws (14)** —
-about 2.9σ under their mean. The proposal says "usable after fine-tuning for a few
+about 2.8σ under their mean. The proposal says "usable after fine-tuning for a few
 epochs" — seven is a few. **So §5's first clause fails and its second holds.** An
 earlier version of this section said "3.3× faster"; that was 23/7 from two single
-runs, and the ratio moves with whichever draw you happen to get (2× against the
-lowest draw, 3× against the mean), so it is not reported.
+runs (and the 23 was the 175-section run's best epoch — the 202-section run's is 19),
+and the ratio moves with whichever draw you happen to get (2× against the lowest draw,
+2.7× against the original run, 2.8× against the mean), so it is not reported.
 
 Final quality: at 15 and 30 min the fine-tuned model sits inside the from-scratch
 seed spread (1.1–1.2% wide), so those differences are noise. At 60 min it is above
@@ -851,8 +852,10 @@ they sit in a region of parameter space from which the target task is quickly re
 "Can it be used directly" and "is it easy to learn from" are different questions, and
 the proposal wrote them as two halves of one sentence.
 
-Three caveats. "Faster" means epochs, not wall clock — with patience-40 early stopping
-both runs cost about the same total time, so the saving only materialises if you stop at
+Three caveats. "Faster" means epochs, not wall clock — wall clock is not comparable here
+(8,038 s for the 60-epoch from-scratch run against 3,942 s for the 47-epoch fine-tune, i.e.
+134 vs 84 s per epoch with GPU contention unrecorded), and with patience-40 early stopping
+every run pays 40 more epochs after its best, so the saving only materialises if you stop at
 the plateau. The pretrained run converges sooner but to a *slightly* worse plateau, which
 is the usual shape. And most importantly: **`STGAT/train.py` had no seed at all until 31
 Aug** — no `--seed` argument existed and the seeding lines were commented out, while
