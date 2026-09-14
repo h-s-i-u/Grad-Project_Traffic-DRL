@@ -187,12 +187,12 @@ arena_*        同上（52.5%，其餘是真的單行）
 | # | 項目 | 狀態 | 誰 |
 |---|---|---|---|
 | 1 | Leaflet 離線化 | **完成**（§10.1）；剩「開一次頁面確認地圖有畫出來」 | 本人 |
-| 2 | **第五次實機自測**（在帶路形、對過帳的網上） | 待跑。看 `rejected` / `setRoute-failed` / **`teleported`** / `gone` / `remove-failed` 皆為 0，結尾 `still to retry 0`。**`teleported` 最值得看**——真實路形改變路口幾何，`LANE_CHANGE_M = 50` 的表現可能與第四次不同（§9.7） | 本人 |
-| 3 | `--episodes 1` 對一次數字 | 待跑：把頁面的 served% 與報告對讀（§6 說明為何只能比比值） | 本人 |
-| 4 | `--speed` / `--refresh` 定案 | 待試。GUI 版建議 `--speed 2`（預設 5 看不清楚） | 本人 |
+| 2 | 第五次實機自測（在帶路形、對過帳的網上） | **完成（09-13）：PASS**，`teleported 0`（§9.9） | 本人 |
+| 3 | `--episodes 1` 對一次數字 | 待跑。**目的是確認 demo 沒有在說謊**：`--episodes 0` 每回合把 `arrived` 歸零，看不到完整的 served%；`--episodes 1` 停在最後一幀，那個 `已送達 / 本回合車輛數` 才能和報告對讀。對的是**比值不是絕對值**（§6 三個原因）。⑦ 的 served 應在 99.9% 附近、封路後掉到 96% 附近；⑦ 相對 ④ 的 worst-ρ 應在 −18 ~ −27%。**對不上代表 demo 和報告在講不同的東西**，那比攤位當機嚴重 | 本人 |
+| 4 | `--speed` / `--refresh` 定案 | 待試，**只影響觀感、不影響任何數字**。`--speed`：GUI 版 5 倍太快，建議 2；純網頁版 5 可。`--refresh`：調低（0.6）車流更新鮮但 ⑦ 重新規劃的暫停更頻繁，調高（0.95）畫面更連續但會有一段時間路上車很少。**「定案」只是指當天不要臨時調** | 本人 |
 | 5 | `demo/sumo_view.xml` | 待存（§10.2）。存了 sumo-gui 才會自動套用配色 | 本人 |
 | 6 | 攤位機器裝 SUMO + 建網 | 待辦。跑不起來就退回 `--backend fake`，網頁完全一樣 | 江彥萱 |
-| 7 | 情境定案（TDX 網格圖層要不要疊） | **未決**（實驗記錄 §18.5 Q）。要做約 30 行 JS | 全體 |
+| 7 | 情境定案 | **完成（09-13）**：封路由按鈕選，`Router.roads()` 列出所有安全可封的路；口試的四個重播情境也都跑完（`sumo_a/`）。TDX 覆蓋圖層列為可選，不做 | 全體 |
 | 8 | 【必讀】**講稿要改**：ATT −36% 已撤下 | 待辦。攤位要講的是「羊群基準送不到 19%、⑦ 送到 97%」＋「負載分散在微觀模擬中重現」（實驗記錄 §13.31） | 全體 |
 
 **口試的重播畫面不在這裡**：那是 `integration/sumo_a/`（10 seeds、beam-8 的實跑，表格裡的每一列），
@@ -473,6 +473,32 @@ from any incoming edge`）。改成每條有缺的進入邊列全部轉向：3 �
 這版只碰量到有缺的 3 條進入邊。有了真實路形，第一段的缺口從 6 降到 3（英才路 5520565628、
 民權路 5521014889 與 3285467668）。第五次實機看：第一段 missing 3、第二段 missing 0；
 `setRoute-failed 0`；GUI 上路是路。
+
+---
+
+### 9.9 第五次實機（09-13，帶路形、對過帳的網上）：PASS
+
+換網之後重跑，驗的不是程式有沒有改，而是**程式在新的幾何上還成不成立**——邊的形狀從
+直線換成 957 條真實路形、缺的 6 個轉向補齊（§9.8）。
+
+```
+fleets {'herding': 734, 'drl': 734}, dropped 66
+herding  driving 417  arrived 317  rejected 0  worst-rho 0.686
+drl      driving 447  arrived 287  rejected 0  worst-rho 0.566
+封路 臺灣大道
+herding  active 417 routed 337 applied 335 deferred 2 setRoute-failed 0 stranded 22 gone 0
+drl      active 447 routed 374 applied 369 deferred 5 setRoute-failed 0 stranded 15 gone 0
+事後      teleported 0    still to retry 0     （兩格）
+PASS: 0 problem(s)
+```
+
+| 指標 | 第四次（舊網） | 第五次（新網） | 讀法 |
+|---|---|---|---|
+| `teleported` | 0 | **0** | §9.7 的啟發式（`LANE_CHANGE_M = 50`）在新幾何上仍然抓得到。**這是本次最該看的一項**——真實路形改變了路口幾何與車道連線，50 公尺這個閾值有可能失準 |
+| `deferred` | 2 / 9 | **2 / 5** | 變少。真實路形讓 netconvert 的車道連線更合理，來不及變換車道的情況就少 |
+| worst-ρ（④ / ⑦） | 0.651 / 0.531 | 0.686 / 0.566 | 兩格都略升。建網時的 `Speed of connection reduced by ... turning radius` 警告是原因：車過路口慢一點，每個窗內路上的車就多一點。**⑦ 相對 ④ 為 −17.5%（前次 −18.4%）**，方向與量級不變 |
+
+`rejected` / `setRoute-failed` / `gone` / `remove-failed` 全部為 0。**即時版（B）到此結案。**
 
 ---
 

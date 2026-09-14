@@ -240,7 +240,7 @@ function render(s){
   const any = Object.values(s.panes)[0];
   document.getElementById("clock").textContent =
     (s.finished ? "回合結束 · " : "") +
-    `模擬時間 ${Math.round(any ? any.t : 0)} s · 負載窗 ${s.window_s} s` +
+    `模擬時間 ${Math.round(any ? any.t : 0)} s · 區間消化率（每 ${s.window_s} 秒）` +
     (s.dropped ? ` · 本回合排除 ${s.dropped} 趟（並非每個策略都排得出路線）` : "") +
     (s.closed.length ? ` · 已封閉 ${s.closed.length} 條邊` : "");
 
