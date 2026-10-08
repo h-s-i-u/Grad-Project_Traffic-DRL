@@ -1182,9 +1182,9 @@ Detailed design and history: [`paper_work/實驗設計.md`](paper_work/實驗設
 
 | Member | Responsible for |
 |---|---|
-| **黃子修** | Prediction models (`STGCN/`, `STGAT/`, `fusion/`), the TDX processing chain and routing arena (`TDX_Data/`), and the decision layer (`integration/`) — everything documented in this README |
-| **黃少鯤** | Taichung OSM road-network export (`Map/Capture_Road_Node.py`, `Map/Map_fined/`) and TDX data collection (`TDX_Data/fetch_tdx_section_*.py`) |
-| **江彥萱** | SUMO microscopic simulation and TraCI integration (in progress) |
+| **黃子修** | Prediction models (`STGCN/`, `STGAT/`, `fusion/`), the TDX processing chain and routing arena (`TDX_Data/`), the decision layer (`integration/`), and the SUMO export, replay validation and live TraCI demo (`integration/export_sumo.py`, `integration/run_sumo_compare.py`, `demo/`) — everything documented in this README |
+| **黃少鯤** | Original data-layer scripts and data: the Taichung OSM road-network export (`Map/Capture_Road_Node.py`, `Map/Map_fined/`), TDX data collection (`TDX_Data/fetch_tdx_section_*.py`) and the CWA rainfall data |
+| **江彥萱** | SUMO front-end design (in progress) |
 
 ## Credits & references
 
