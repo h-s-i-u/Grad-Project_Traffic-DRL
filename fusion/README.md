@@ -3,9 +3,10 @@
 > STGCN path (regular structure) + STGAT path (anomalous structure), joined by the
 > proposal's eq. 3 gate, with an FC head emitting 15 / 30 / 60 min.
 >
-> See also [`../paper_work/實驗設計.md`](../paper_work/實驗設計.md) §3.2 and
+> See also [`../paper_work/實驗設計.md`](../paper_work/實驗設計.md) §3.7 and
 > [`../paper_work/實驗記錄_DRL決策模組.md`](../paper_work/實驗記錄_DRL決策模組.md)
-> §13.7, §13.11, §13.18.
+> §13.7 (fixed-weight ensemble), §13.19 (pipeline), §13.22 (training and ablations),
+> §13.24 (wired into the decision layer).
 
 ```
 gate   = σ( W₁ · (s + t) )
@@ -15,6 +16,13 @@ output = FC(Fusion)                    → 15 / 30 / 60 min
 
 `s` and `t` are the two paths' **hidden features**, not their finished forecasts. That is
 where the proposal puts the fusion: between the backbones and the output head.
+
+As implemented (`model.py`), the gate multiplies the features *before* the linear maps:
+`Fusion = tanh(W₂(gate ⊙ t) + W₃((1 − gate) ⊙ s))`, after `proj_cn` has taken STGCN's
+256-dim feature down to 64. Same parameters, a different function from the equation as
+written, and one consequence that matters: W₃'s bias is never gated, so a gate pinned at 1
+would still let the STGCN side add a learned constant. That is why control E bypasses the
+gate (`tanh(W₂ t)`) instead of pinning it.
 
 ---
 
@@ -58,7 +66,7 @@ trained on per-section scaling **does not raise — it just returns nonsense**. 
 |---|---|
 | `paths.py` | Loads both `model/` directories into one process under **aliases** (both repos ship a top-level package called `model`; 實驗記錄 §4.1 hit this collision before). Exposes each path's `features()` on a common `[B, N, C]`. |
 | `data.py` | The unified dataloader: same rows → two input formats, two normalisations, time-in-day, target mask. |
-| `model.py` | The eq. 3 gate + FC head. `--freeze` selects joint training or gate-only. |
+| `model.py` | The eq. 3 gate + FC head. `--freeze` selects joint training or gate-only; `--single-path` bypasses the gate (control E). |
 | **`verify.py`** | **Run this before training anything.** See below. |
 | `train.py` | Training loop (masked loss, Adam 3e-4, 0.96 decay per epoch, early stopping, sidecar). |
 | `evaluate.py` | Masked scoring, gate statistics, and `--dump-all`. |
@@ -102,7 +110,7 @@ persistence  4.2872 / 4.6744 / 5.1281
 ```
 
 If the pipeline is right they must; if it is not, they cannot. **Do not train until this
-passes.**
+passes.** On the 202-section data it did: all nine within 0.1% (實驗記錄 §13.19).
 
 > Persistence is the more sensitive of the two, because it uses no model at all: if it is
 > off, the fault is in the rows or the mask.
@@ -122,18 +130,13 @@ cd fusion
 # 0. verify the pipeline (required)
 python verify.py --device cpu
 
-# 1. the proposal: both paths train
-python train.py --freeze none --out checkpoints/fusion_joint.pt
+# 1. the reported configuration C: the proposal's joint training, plus a time-of-day
+#    channel on the STGCN path (~91 s per epoch; best epoch 25, stopped at 37)
+python train.py --freeze none --stgcn-tod --epochs 60 --batch 32 --patience 12 \
+                --out checkpoints/fusion_c.pt
 
-# 2. control: gate only, backbones frozen
-python train.py --freeze both --stgcn-ckpt ../STGCN/STGCN_taichung_p12.pt \
-                --out checkpoints/fusion_frozen.pt
-
-# 3. ablation: the gate also sees a per-section embedding and time-of-day
-python train.py --freeze none --extended-gate --out checkpoints/fusion_ext.pt
-
-# 4. score, and emit a dump integration/ha_baseline.py can read
-python evaluate.py --checkpoint checkpoints/fusion_joint.pt --split test --dump-all
+# 2. score it, and emit the dump the decision layer and integration/ha_baseline.py read
+python evaluate.py --checkpoint checkpoints/fusion_c.pt --split test --dump-all
 ```
 
 **Reported configuration** is `--freeze none --stgcn-tod` (checkpoint `fusion_c.pt`).
@@ -165,6 +168,11 @@ gate is only a rule for combining them. `--single-path` records itself in the me
 `evaluate.py` reads it back: a single-path checkpoint still carries W1 and W3, so a
 default rebuild would load cleanly and then score a gate that was never trained.
 
+Two more settings exist but have no recorded run: `--freeze both` (gate and head only, with
+`--stgcn-ckpt ../STGCN/STGCN_taichung_p12.pt`) and `--extended-gate` (the gate also sees
+`s − t`, a per-section embedding and time-of-day). Control E answered the question they
+were meant to probe more directly.
+
 > **`--dump-all` overwrites the decision layer's input.** The dump name
 > `integration/dump_fusion_<split>_p<N>.npz` does not encode which checkpoint produced
 > it, and `integration/make_drl_input.py --source fusion` reads exactly those three
@@ -184,21 +192,23 @@ default rebuild would load cleanly and then score a gate that was never trained.
 | Loss | L2 (MSE) | **masked MAE** by default (`--loss mse` restores it) | MAE is what every number in 實驗記錄 is reported in; optimising a different quantity than the one reported lets the two diverge quietly |
 | Masking | not specified | **external `mask.npy`** | 24.6% of cells are imputed and scoring on them is nearly free. METR-LA's `null_val=0.0` mechanism does **not** transfer — imputed cells hold real numbers, so there is no sentinel to test for (實驗設計 §2.3) |
 | Per-path normalisation | not specified | **each path keeps its own** | Unifying it invalidates the pretrained weights and makes warm-starting impossible |
-| Time-of-day into the STGCN path | implied — §4.3 assigns that path "尖峰時段、星期週期" | **added** (`--stgcn-tod`), and **measured to contribute nothing** | The shipped STGCN feeds on speed alone, which cannot express what the proposal asks that path to extract. Adding it is faithful to §4.3, but ablation C₀ puts its contribution at 0.03–0.43% on test and 0.06–0.18% on val — under the 1% noise floor. The −1.9% at 60 min comes from end-to-end joint training instead (實驗記錄 §13.22 ⑥) |
+| Time-of-day into the STGCN path | implied — §4.3 assigns that path "尖峰時段、星期週期" | **added** (`--stgcn-tod`), and **measured to contribute nothing** | The shipped STGCN feeds on speed alone, which cannot express what the proposal asks that path to extract. Adding it is faithful to §4.3, but ablation C₀ puts its contribution at 0.03–0.43% on test and 0.06–0.18% on val — under the 1% noise floor. The −1.9% at 60 min comes from the training regime instead: control E reaches it with one path and no gate (實驗記錄 §13.22 ⑥–⑦) |
+| Order inside eq. 3 | gate applied after W₂ and W₃ | gate applied first, then W₂ and W₃ (see the note under the equation) | Same parameters; W₃'s bias stays ungated. The report states eq. 3 as written and gives the implemented form beside it |
 
 ### The two `--freeze` settings answer different questions
 
 | | `--freeze both` | `--freeze none` (the proposal) |
 |---|---|---|
 | what learns | gate + head only | everything |
-| can it break the 0.934 error correlation | **no** — two frozen backbones are wrong in the same places, and no gate invents independent information | **yes** — the gate finally gives the paths a reason to specialise |
+| can it break the 0.934 error correlation | **no** — two frozen backbones are wrong in the same places, and no gate invents independent information | **in principle** — the gate gives the paths a reason to specialise. Measured, it did not: the gate settled on the fixed weight and the second path added nothing (§13.22 ③⑦) |
 | one model, three horizons | **no** — the STGCN backbone is bound to a single horizon | **yes** — the new FC head emits all twelve steps |
 | cost | minutes | one full training run |
 
 實驗記錄 §13.7 already measured the ceiling for the frozen case: the best **fixed** weight
 beats STGAT alone by **0.40%**, and the two models' errors correlate at **0.934**. So
-`--freeze both` is expected to gain almost nothing — its value is to **confirm that
-ceiling cheaply**, not to produce a result.
+`--freeze both` is expected to gain almost nothing — its value would be to **confirm that
+ceiling cheaply**, not to produce a result. It was not needed in the end: control E
+settled the question with the jointly trained model.
 
 ---
 
@@ -224,14 +234,24 @@ which is the reason the proposal specifies this design.
 > **an improvement below 1% is reported as "no measurable gain"**, because the best fixed
 > weight is already worth 0.40%.
 
+**Outcome (C, test split).** Mean opening 0.8304, spread 0.0350 across sections and
+0.0515 across time: the gate moves, but its average is the fixed weight §13.7 found
+(0.2/0.8, so the output is about four-fifths STGAT). On the same 7,519 windows C beats
+STGAT by 0.14 / 1.03 / 2.01% at 15 / 30 / 60 min, so by the criterion above 15 min shows
+no gain, 30 min just crosses the line and 60 min gains about 2%. Controls C₀ and E then
+put all of it on the training regime rather than on the gate (§13.22 ③⑥⑦).
+
 ---
 
 ## What this folder does not touch
 
 - **No changes to `STGCN/` or `STGAT/`.** The backbones are loaded under aliases rather
   than vendored, so nothing drifts from upstream.
-- **No changes to the decision layer in `integration/`.**
-- **Not wired into `make_drl_input.py`.** 實驗記錄 §13.13 established that at 14.1%
-  coverage *by length* prediction has no measurable effect on routing (86% of routes are
-  identical), so feeding fusion into the decision layer would change no number there and
-  would only add another setting that can drift. **Fusion is a Track A result.**
+- **No changes to the decision layer's code in `integration/`.**
+- **One file connects it to the decision layer.** `evaluate.py --dump-all` writes
+  `integration/dump_fusion_<split>_p<N>.npz`, and `integration/make_drl_input.py
+  --source fusion` turns the 15-minute dump into baseline 4's forecast and policy 7's
+  `tpred` (實驗記錄 §13.24). The agent was retrained on it and all six paired deltas
+  (S2 and S3, three metrics) stayed within one standard deviation, as §13.13 predicted:
+  at 14.1% coverage *by length*, prediction has no measurable effect on routing. That
+  dump is also why `--dump-all` must only ever be run on the reported checkpoint.

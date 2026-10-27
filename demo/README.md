@@ -10,7 +10,9 @@ python app.py --drl ../integration/checkpoints/taichung/drl_fusion_togo25.pt
 # http://127.0.0.1:8000
 ```
 
-Runs without SUMO. Without `--drl` the second pane is omitted.
+Runs without SUMO. Without `--drl` the second pane is omitted. A live version drives the
+same two panes from two SUMO instances (`--backend sumo`, see `controller.py` below); both
+are complete.
 
 ## Files
 
@@ -19,7 +21,7 @@ Runs without SUMO. Without `--drl` the second pane is omitted.
 | `app.py` | FastAPI application and `FakeBackend` — two fleets advancing on a background thread with no simulator |
 | `controller.py` | `SumoBackend` — the same five methods, with the cars in two SUMO instances driven over TraCI. `--backend sumo` imports it. Has a `--selftest` that runs with or without SUMO |
 | `shared.py` | What both backends must agree on: the `Backend` contract, `PANES`, the episode demand generator, the per-policy batch assignment and the common subset |
-| `index.html` | One static page: two synchronised Leaflet maps, the road buttons, and eight figures per pane. No build step |
+| `index.html` | One static page: two synchronised Leaflet maps, the road buttons, and nine figures per pane. No build step |
 | `build_geometry.py` | Recovers the real road shape of every arena edge → `arena_geometry.json` |
 | `arena_geometry.json` | Committed, because the script's inputs are release artifacts rather than repository files. See below |
 
@@ -91,7 +93,12 @@ Other behaviour worth knowing:
   cannot be read against a reported served-fraction.
 - It is **not** a microscopic traffic simulation: no car-following, junctions, or signals.
   Nothing this page displays is a result; the reported figures come from
-  `integration/run_compare.py`.
+  `integration/run_compare.py`. The page's numbers also differ from the report's for four
+  reasons: the demand is a different random draw of the same funnel, a closure is in force
+  from the next assignment rather than after 10% of the dispatch, cars start partway along
+  their routes (about half a trip left on average), and policy 7 decodes greedily rather
+  than with beam-8. What carries over
+  is the ratio between the two panes, not the values.
 
 ### Flags
 
@@ -100,10 +107,11 @@ Other behaviour worth knowing:
 | `--vehicles` | 800 | `TAICHUNG_CAPACITY_SCALE = 0.0429` was calibrated at 800. At 300 no edge crosses `RHO_THRESHOLD = 0.85`, eq. 4's saturation term is identically zero, and the two panes converge |
 | `--speed` | 5 | Simulated seconds per real second |
 | `--refresh` | 0.85 | Fraction of the fleet that must finish before the next episode. Lower means fresher traffic and more frequent pauses while policy 7 re-plans |
-| `--episodes` | 0 | Stop after N episodes and hold the final frame. 0 keeps going, which is what a running demo wants; 1 is how to read a served-fraction off the page |
+| `--episodes` | 0 | Stop after N episodes and hold the frame. 0 keeps going, which is what a running demo wants. The hold comes once `--refresh` of each fleet has finished, so at the default 0.85 part of the last episode is still on the road; with `--refresh 1` every trip of that episode has finished on the held frame |
 | `--beam` | 0 (greedy) | Decoding width for policy 7. Greedy plans 800 vehicles in ~6 s on GPU; beam-8 is 8–10× that and recovers most of the dead-ends |
 | `--device` | auto | `cuda` when available; CPU is ~1.6× slower per vehicle |
-| `--backend` | fake | `sumo` imports `controller.SumoBackend` |
+| `--backend` | fake | `sumo` imports `controller.SumoBackend`. `--refresh` and `--episodes` reach the fake backend only; the SUMO one runs at 0.85 and never stops |
+| `--host`, `--port` | 127.0.0.1, 8000 | The port is checked before anything is built: if it is taken the program stops at once and prints the `pkill` line that frees it |
 
 ## `index.html`
 
@@ -159,6 +167,7 @@ regenerate it.
 
 ```bash
 pip install eclipse-sumo traci sumolib            # binaries on PATH plus the two packages
+                                                  # (the reported runs used SUMO 1.18.0)
 cd ../integration
 python export_sumo.py --drl checkpoints/taichung/drl_fusion_togo25.pt   # writes sumo/, with road shapes
 cd sumo && sh build_net.sh && cd ../../demo   # netconvert, turn check, rebuild only if a turn is missing
@@ -172,15 +181,16 @@ policy 4 and policy 7 produce different traffic states; `SumoBackend` starts one
 process per pane and steps them in lockstep from one thread. Each step is one simulated
 second; `--speed` is how many of them happen per real second.
 
-Everything SUMO-specific is inside the `_Sim` class (start, step, add, where, set_route,
-remove). `_MockSim` implements the same calls with cars that advance one edge every ten
-steps, which is what `--selftest --mock` runs against — it exercises episodes, the
-common subset, closure, route injection, stranding, the mid-junction retry and the
-snapshot, and nothing below the TraCI line.
+Everything SUMO-specific is inside the `_Sim` class (start-up, step, add, where, set_route,
+remove, and the two lane queries `lane_state` and `lane_reaches`). `_MockSim` implements
+the same calls with cars that advance one edge every ten steps, which is what
+`--selftest --mock` runs against — it exercises episodes, the common subset, closure,
+route injection, stranding, the mid-junction retry and the snapshot, and nothing below
+the TraCI line.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `DEMO_SUMO_DIR` | `../integration/sumo` | where `taichung.net.xml` is. The backend writes `live.rou.xml` (the vType only) and `live.sumocfg` next to it |
+| `DEMO_SUMO_DIR` | `../integration/sumo` | where `taichung.net.xml` is. The backend writes `live.rou.xml` (the vType only) and one `live_<key>.sumocfg` per pane next to it (`sumo-gui` puts the file name in the window title, which is how the two windows are told apart); each instance logs to `live_<key>.log` |
 | `DEMO_SUMO_GUI` | `0` | `1` opens two `sumo-gui` windows instead of headless `sumo` |
 | `DEMO_SUMO_STEP` | `1.0` | simulation step length in seconds |
 
@@ -188,7 +198,8 @@ snapshot, and nothing below the TraCI line.
 
 `sumo-gui`'s defaults are grey roads and vehicles a few pixels wide: fine when you are
 leaning into the screen, useless from across a room. Set it up once and save it as
-`demo/sumo_view.xml`, which `controller.py` passes to every window it opens.
+`demo/sumo_view.xml`, which `controller.py` passes to every window it opens. No
+`sumo_view.xml` is committed yet; the steps below produce a usable one.
 
 Open the View Settings dialog (the coloured-wheel icon in the toolbar) and set:
 
@@ -239,10 +250,12 @@ Four things it does differently from `FakeBackend`, on purpose:
    sees is the same: no new car enters the road and the ones on it drive off. `sumo-gui`
    does not paint the road shut; the web page does.
 
-Two snapshot fields exist only here: `pending` (above) and `rejected` — routes SUMO
-refused at insertion, which happens only if `netconvert` dropped an edge. It should be 0;
-the self-test checks that it is, because a car rejected in one pane and accepted in the
-other silently un-pairs the experiment.
+Five snapshot fields exist only here, and the page shows none of them: `pending` (above);
+`rejected` — routes SUMO refused at insertion, which happens only if `netconvert` dropped
+an edge; `lost` — cars SUMO no longer knows without having reported them as arrived;
+`deferred` — cars waiting to be re-routed once they leave a junction or a lane end (below);
+and `teleported` (below). `rejected` should be 0; the self-test checks that it is, because
+a car rejected in one pane and accepted in the other silently un-pairs the experiment.
 
 Load is counted the way ρ is defined — edge *entries* over the last ~154 s — from one
 road-id snapshot per step obtained through TraCI subscriptions (three calls per step
@@ -250,7 +263,7 @@ regardless of fleet size, against 800 `getRoadID()` round trips). ATT is not on 
 panel: offline it is the BPR estimate, live the only true value is what SUMO measured,
 and `tripinfo` is where a later version should read it from.
 
-**Two live runs so far (4–5 Sep 2026), 734 cars per pane.** Verified: every exported
+**Two live runs (4–5 Sep 2026), 734 cars per pane.** Verified: every exported
 edge id survives `netconvert` (`rejected 0`), the subscription flow loses no car
 (driving + arrived = fleet), `setRoute()` is accepted on cars in motion. The refusals
 were the permission problem above — misread the first time as `netconvert` dropping
@@ -269,7 +282,7 @@ stale-subscription errors. What the SUMO log added was one car braking to a halt
 end of its lane "because there is no connection to the next edge": the new route was
 legal for the *edge* but the car sat in a lane that does not link to the next edge, too
 close to the junction to change lanes, and with teleporting off it would have blocked
-that lane for the rest of the run. Two changes, one run still to confirm them:
+that lane for the rest of the run. Two changes, both confirmed by the fourth run:
 
 - A car within 50 m of its lane end, on a lane that does not link into the new route's
   next edge, is `deferred` rather than handed the route, and re-routed once its road id
@@ -277,7 +290,7 @@ that lane for the rest of the run. Two changes, one run still to confirm them:
   are static and cached, so this costs two TraCI calls per lane, once.
 - `--time-to-teleport.disconnected 60` as the safety valve: a car the heuristic misses
   is moved on after 60 s instead of blocking the lane forever. Every such move is
-  counted as `teleported` on the panel, and the self-test requires it to be 0.
+  counted as `teleported` in the snapshot, and the self-test requires it to be 0.
 
 **Fourth run (7 Sep):** `teleported 0`, every deferred car re-routed, self-test PASS.
 Running the page with `DEMO_SUMO_GUI=1` then showed two things the self-test cannot: the
@@ -293,7 +306,8 @@ So the reading that was wrong for the 20–40 closed-road refusals was right for
 
 `integration/export_sumo.py` now does two things about it. `--shapes` (default: the
 committed `demo/arena_geometry.json`) writes each edge's recovered polyline as its
-`shape`, which fixes the drawing and cuts the chord-angle false U-turns from 27 to 14.
+`shape` (957 edges have a bend; the rest are straight in reality), which fixes the
+drawing and cuts the chord-angle false U-turns from 27 to 14.
 `--check-net` then compares every turn the graph allows with every `<connection>` in the
 built `.net.xml`, lists the gaps, and writes a lane-level `taichung.fix.con.xml` stating
 every turn out of each incoming edge that has a gap — `netconvert` reads a listed edge's
@@ -301,8 +315,16 @@ connections as that edge's complete set, so a file naming only the gap drops the
 other turns (the first two-pass build fixed 3 turns and lost 3 others that way).
 `build_net.sh` is two-pass — build, check, rebuild with the fix file if anything is
 missing, check again with `--strict`. Every other edge keeps `netconvert`'s own lane
-assignment. With the shapes in place the first pass had 3 gaps, down from 6. A fifth run
-on that network closes this section.
+assignment. With the shapes in place the first pass had 3 gaps, down from 6, and the
+rebuild none.
+
+**Fifth run (13 Sep), on that network: PASS.** 734 cars per pane. Closing 臺灣大道 gave
+337 of the 417 cars still driving a new route in the herding pane and 374 of 447 in the
+policy-7 pane (2 and 5 of them after a short deferral), and stranded 22 and 15.
+`rejected`, `setRoute-failed`, `gone` and `teleported` were 0 in both panes, so the 50 m
+lane-end rule still holds on the real junction geometry. Before the closure, policy 7's
+worst-ρ was 17.5% below the baseline's (0.566 against 0.686), the same direction as the
+reported S2 result. This closes the live version.
 
 ### The routing contract
 

@@ -51,7 +51,7 @@ python build_arena.py
 
 ```
 Map/Map_fined/*.csv ────► build_simplified_network.py ──► simplified_{nodes,edges}_taichung.csv
-（黃少鯤以 Capture_Road_Node.py 產生）        【路網簡化】      simplified_meta.json
+（以離線擷取工具產生）                        【路網簡化】      simplified_meta.json
   39,920 節點 / 43,711 段                                          │
                                                                    │
 fetch_tdx_section_metadata.py ─────────► build_network.py ◄────────┘
@@ -85,6 +85,10 @@ fetch_tdx_section_live.py ──────────────────
 
 ★ = 相對原版新增的產物
 
+`Map_fined` 由離線擷取工具 `Capture_Road_Node_Offline.py` 產生（以 pyrosm 離線解析
+`.osm.pbf`、可多邊形框選），該工具不在版本庫中；`Map/Capture_Road_Node.py` 是以線上 osmnx
+擷取的較早版本（路段只輸出 6 欄，`Map_fined` 有 13 欄），產生不出現在的 `Map_fined`。
+
 ### 三層路網，各司其職
 
 | 層 | 規模 | 用途 |
@@ -113,7 +117,7 @@ fetch_tdx_section_live.py ──────────────────
 | **`build_speed.py`** | `raw.jsonl` + 上一步產物 | 車速矩陣、**mask**、鄰接矩陣、索引 | **不需要** OSM 路網檔 |
 | `convert_to_stgcn_dataset.py` | `build_speed.py` 產物 | `STGCN/data/taichung/` | `.npy` → scipy sparse `.npz` |
 | **`convert_to_stgat_dataset.py`** | 同上 | `STGAT/data/taichung/` | 切成 DCRNN 視窗格式，額外加 **time-of-day** 特徵 |
-| **`build_arena.py`** | 簡化圖 + mapping | `arena_*_taichung.csv`、`arena_meta.json` | 決策層場域；**取子圖後會再簡化一次** |
+| **`build_arena.py`** | 簡化圖 + `section_to_edges.csv` + `taichung_section_index.csv`（202 個存活路段） | `arena_*_taichung.csv`、`arena_meta.json` | 決策層場域；**取子圖後會再簡化一次** |
 
 ### `build_simplified_network.py` 的三個設計要點
 
@@ -164,16 +168,18 @@ fetch_tdx_section_live.py ──────────────────
 >
 > **STGCN 的 `vel.csv` 沒有這個特徵，而那不只是「輸入不對等」**：計畫書指派 STGCN Path
 > 萃取「規則性（尖峰時段、星期週期）」，而週期性正是 time-of-day 定義的東西——
-> 實測 STGCN 在最 routine 的分桶與平日尖峰**輸給一個連模型都不是的歷史平均**。
-> `fusion/` 的雙路模型已補上這個通道（`--stgcn-tod`）。詳見 `實驗記錄` §13.20 ③。
+> 實測 STGCN 在最 routine 的分桶與平日尖峰**輸給一個連模型都不是的歷史平均**
+> （是否正是缺這個通道所致，沒有單獨驗證）。`fusion/` 的雙路模型補上了這個通道
+> （`--stgcn-tod`），但消融量到它沒有可測量的效益（C₀ 與 C 相差 0.03–0.43%）。
+> 詳見 `實驗記錄` §13.20 ③、§13.22 ⑥。
 
-### 輔助工具（非主線）
+### 輔助工具（非主線，原樣保留）
 
 | 程式 | 用途 |
 |---|---|
 | `diagnose_missing_data.py` | 缺值分布診斷（曾用來抓出 `$top` 設太小導致資料被截斷的 bug） |
 | `diagnose_speed_anomalies.py` | 車速異常診斷（就是這支發現 68% 無效佔位值） |
-| `build_adjacency_matrix.py` | 鄰接矩陣工具，供決策層與 SUMO 整合調參用 |
+| `build_adjacency_matrix.py` | 以 OSM 路口為節點、沿路網最短距離建高斯核鄰接矩陣（讀 `Capture_Road_Node.py` 的輸出）。主線的預測圖建在 TDX 路段上、改由 `build_network.py` 計算，這支沒有用於任何報告數字 |
 | `map_section_to_network.py`、`build_taichung_stgcn_dataset.py` | **已被 `build_network.py` / `build_speed.py` 取代**，保留供對照 |
 
 ---
@@ -221,9 +227,10 @@ taichung_vel.csv（50,283 × 202，表面上 0% 缺失）
 > **異常值為何轉缺值而非 clip**：clip 會留下一個「捏造的觀測」並被 mask 標成 `True`，
 > 等於拿假資料去評分；轉缺值則交由補值機制處理，且 mask 正確標成 `False`。
 
-### 2. 評估必須用 mask，否則成績虛低
+### 2. 評估必須用 mask，否則成績失真
 
-最終仍有約 **24.6% 的儲存格是補值**（METR-LA 只有 7.13% 缺失，是其 3.5 倍）。
+最終仍有約 **24.6% 的儲存格是補值**（METR-LA 全資料的缺失為 8.11%，台中約為其 3 倍；
+記錄中另一個常被引用的 7.13% 是 METR-LA 訓練段的比例）。
 mask（`True` = 真實觀測）在**補值之前**取得，兩個模型都已備妥現成工具：
 
 ```bash
@@ -237,6 +244,10 @@ cd STGAT && python evaluate_masked_taichung.py                        # 一次�
 > `null_val=0.0` 遮罩；台中資料已被填補、**沒有 0 可遮罩**，必須用外部 mask。
 > 若在台中資料上沿用 `null_val=0.0`，遮罩會完全失效（資料裡沒有 0）——
 > 這正是 STGAT 當初 MAE 卡在 8.5 的那個 bug 的翻版。
+>
+> 【但書】兩個骨幹在台中的**訓練**就是這個情況：STGCN 用不含遮罩的 MSE，STGAT 的
+> `null_val=0.0` 只排除值為 0 的位置，而台中的補值不是 0。只有 `fusion/` 的訓練與
+> **所有評估**使用外部 mask。
 
 **實測：遮罩的影響會隨 horizon 反轉**（202 節點版正式訓練）：
 
@@ -277,7 +288,8 @@ elif dataset_name == 'taichung':
 |---|---|
 | **時區** | `DataCollectTime` 為 **UTC**，台灣時間需 **+8 小時**。做尖峰／星期分析前務必轉換 |
 | **速度單位** | **km/h**（METR-LA 是 mph，不可混用） |
-| **一對多對應** | 一個 TDX 路段橫跨數個路口，`section_to_edges.csv` 記錄它涵蓋的所有 OSM edge。244 個路段展開後共 **715 條唯一邊**，其中屬於 202 個存活路段的有 **601 條** |
+| **一對多對應** | 一個 TDX 路段橫跨數個路口，`section_to_edges.csv` 記錄它涵蓋的所有 OSM edge（237 個路段還原成路徑，7 個退回單一邊）。244 個路段展開後共 **715 條唯一邊**，其中屬於 202 個存活路段的有 **601 條** |
+| **`Map_fined` 的推算欄位** | 凡是推算而非取自 OSM 標籤的值都附布林旗標：`speed_imputed` **89.7%**（39,202／43,711 段，全部補 50 km/h；30 km/h 那一級適用的 service、track 已在擷取時排除）、`lanes_imputed` **85.9%**（缺失補 1）、`road_name_missing` 8.0%。國道與高架共 2,027 段已排除，清單在 `excluded_edges_review.csv` |
 | **金鑰** | 放在 `.env`（已被 `.gitignore` 忽略）。舊金鑰曾以明文進過 git 歷史，**建議至 TDX 後台重新產生** |
 | **`.jsonl` 不入版控** | 11.9 GB，需自行執行 `fetch_tdx_section_live.py` 產生 |
 | **Windows 的 int32 陷阱** | `astype(int)` 在 Windows 是 int32，而 **84.7% 的 OSM id 超過 2³¹−1**。一律用 `to_numpy(dtype="int64")` |
@@ -289,14 +301,14 @@ elif dataset_name == 'taichung':
 | 項目 | 數值 |
 |---|---|
 | 原始資料 | 28,023,445 行 / 176 天 / 11.9 GB |
-| 時間範圍 | 2026-01-27 ~ 07-21，5 分鐘間隔，**50,283 步**（> METR-LA 的 34,272） |
+| 時間範圍 | 2026-01-27 ~ 07-21 06:05（UTC；向 API 請求的是 01-28 ~ 07-27），5 分鐘間隔，**50,283 步**（> METR-LA 的 34,272） |
 | TDX 路段 | 244 個 → **244 通過 300 m 門檻（100%）** → **202 通過缺值門檻** |
 | 路網簡化 | 39,920 / 43,711 → **9,904 節點 / 27,022 有向邊**（合併 27,058 個中途節點） |
 | 無效佔位值 | 67.94% |
 | 降採樣後缺值 | 31.2% → 剔除 42 個路段後**補值率 24.6%** |
-| 鄰接矩陣 | 202×202，σ=**2,283.4 m**、κ=**3,341.8 m**、密度 **37.56%**（目標 37.3%） |
+| 鄰接矩陣 | σ=**2,283.4 m**、κ=**3,341.8 m**，以 244 個路段求得（密度 **37.56%**，目標 37.3%）；剔除缺值路段後，模型實際使用的 **202×202** 密度為 **39.5%** |
 | 種子邊 | **715** 條（244 路段）／ **601** 條（202 存活路段） |
-| 邊側覆蓋（完整圖） | 601 / 27,022 = **2.2%** |
+| 邊側覆蓋（簡化圖） | 601 / 27,022 = **2.2%** |
 | **邊側覆蓋（場域）** | **416 / 1,690 = 24.6%（按邊）**、**14.1%（按長度）** |
 | 場域 | **840 節點 / 1,690 有向邊**，平均 28.7 跳，141 / 202 個路段有代表 |
 | STGAT 資料集 | 12→12 步 × 202 路段 × 2 特徵（train/val/test = **35,182 / 7,539 / 7,539**） |
@@ -307,6 +319,7 @@ elif dataset_name == 'taichung':
 |---|---:|---:|---:|
 | **Fusion**（雙路閘控，一個模型三時程） | **3.3786** | **3.4799** | **3.5579** |
 | STGAT | 3.3802 | 3.5127 | 3.6276 |
+| STGAT 種子變異（n = 4） | 3.398 ± 0.020 | 3.525 ± 0.018 | 3.627 ± 0.008 |
 | STGCN | 3.5560 | 3.7535 | 3.9549 |
 | HA（歷史平均） | 4.0486 | 4.0489 | 4.0496 |
 | persistence | 4.2872 | 4.6744 | 5.1281 |
@@ -318,6 +331,9 @@ elif dataset_name == 'taichung':
 > **集成權重**：`W_STGCN/W_STGAT = 0.2/0.8`，val 上挑選、**test 上確認**
 > （test 最佳為 0.15，兩者差 0.07%，未過擬合）。但固定權重集成只勝過單獨 STGAT 0.29%，
 > 兩模型誤差相關 0.908——這正是改做 Gated Fusion 的實證動機。
+>
+> **Fusion 的結果**：閘門學到的比例與 0.2/0.8 幾乎相同；60 分鐘約 −2% 的改善來自訓練方式
+> 本身，消融顯示日內時間通道、雙路與閘控的貢獻都無法量測（`實驗記錄` §13.22 ⑦）。
 
 ---
 
@@ -337,7 +353,7 @@ elif dataset_name == 'taichung':
 
 **這不是 pipeline 的 bug，是資料可得性的限制**——TDX 的 202 個路段對應約 600 條邊，
 而路網要強連通且提供替代道路至少需要 1,690 條。**縮小場域已實測無效**
-（節點縮到 58%、按邊覆蓋率翻倍，結果零變化），因為按長度的覆蓋率不會跟著動。
+（節點縮到 58%、按邊覆蓋率提高 1.6 倍（15.2% → 24.6%），結果零變化），因為按長度的覆蓋率不會跟著動。
 
 > **對本 pipeline 的意涵**：再花力氣提高「按邊數」的覆蓋率沒有幫助。
 > 有幫助的是**更多 TDX 路段**（更多真實觀測的道路長度），那取決於資料源而非處理程式。
@@ -345,5 +361,4 @@ elif dataset_name == 'taichung':
 ---
 
 相關文件：`paper_work/實驗設計.md`（實驗方法與評估協定）、
-`paper_work/實驗記錄_DRL決策模組.md`（完整歷程與所有實測數字）、
-`paper_work/原始資料欄位對應表.pdf`（各欄位定義）
+`paper_work/實驗記錄_DRL決策模組.md`（完整歷程與所有實測數字）

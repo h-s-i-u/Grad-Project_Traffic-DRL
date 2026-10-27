@@ -55,7 +55,7 @@ Two findings shape how everything below should be read, and both are negative:
 | timesteps | 34,272 | **50,283** |
 | road network | Gaussian-kernel sensor graph | **real OSM: 39,920 nodes → 9,904 after lossless simplification** |
 | edge times | relative units | **seconds** |
-| missing / imputed | 7.13% | **24.6%** — evaluation must use a mask |
+| missing / imputed | 8.11% (stored as zeros) | **24.6%** — evaluation must use a mask |
 
 Both run through `python run_compare.py --graph {metr-la,taichung}`.
 
@@ -86,7 +86,7 @@ Both run through `python run_compare.py --graph {metr-la,taichung}`.
    └────────┴─────────┴─────────┴──────────┴────────────┴───────────────┴─────────┘
                                                                    ▼
         evaluate under one shared BPR congestion model:
-        ATT · Gini(edge load) · worst-link saturation ρ · throughput
+        served% · ATT · Gini(edge load) · worst-link saturation ρ · throughput
 ```
 
 ---
@@ -101,10 +101,10 @@ Both run through `python run_compare.py --graph {metr-la,taichung}`.
 | **`fusion/`** | **Gated Fusion (proposal §4.3)**: the dual-path model with the eq. 3 gate, plus the unified dataloader both backbones share. See its [README](fusion/README.md). |
 | **`TDX_Data/`** | Taichung traffic-data pipeline: fetch TDX → build network → build speed matrix → convert for both models. See its [README](TDX_Data/README.md). |
 | **`demo/`** | **The PoC (proposal §5)**: two routing policies side by side on the arena, with a road that can be closed at runtime. FastAPI + one static page, and it runs without SUMO. See its [README](demo/README.md). |
-| `Map/` | Taichung OSM road network (`Map_fined/` = the raw export from 黃少鯤) + the simplified routing graph, speed matrix, mask and adjacency |
+| `Map/` | Taichung OSM road network (`Map_fined/` = the raw OSM export) + the simplified routing graph, speed matrix, mask and adjacency |
 | `CWA/` | Central Weather Administration rainfall — evaluated, then **deliberately excluded**; see below |
-| `paper_work/` | Experimental design, development log, architecture diagram, written reports |
-| `*.pdf` | The three method papers + the project proposal — see Credits |
+| `paper_work/` | The experimental design (`實驗設計.md`), the experiment log (`實驗記錄_DRL決策模組.md`) and the demo's development log (`demo_開發記錄.md`). The report, diagrams and working notes stay local and are not in the repository |
+| `*.pdf` | The three method papers + the project proposal — local copies only (`*.pdf` is gitignored); see Credits |
 | `requirements.txt` | Python dependencies (pip freeze of the `traffic_rl` env) |
 
 > `STGAT/` and `STGCN/` are **vendored upstream repositories** and keep their
@@ -125,7 +125,10 @@ Both run through `python run_compare.py --graph {metr-la,taichung}`.
 ## Setup
 
 Python 3.10, CUDA 12.1. A GPU is needed to (re)train the models and the DRL agent; the
-routing comparison itself runs on CPU in ~1 s.
+routing comparison runs on CPU — the analytic policies take seconds, the agent's ten-seed
+rollouts take minutes. The numbers in this README were measured on Windows 11 + WSL2
+(Ubuntu) with an Intel Core i5-14600KF, 64 GB RAM and an NVIDIA RTX 3080 (10 GB); the
+SUMO runs used SUMO 1.18.0.
 
 [Data](https://drive.google.com/drive/folders/1m0iOxlsheqmTdWPemat-1QlAfaugG6lU?usp=sharing)
 
@@ -151,6 +154,7 @@ python build_network.py                # map-matching + road distances (seconds 
 python build_speed.py                  # speed matrix + missing-value mask
 python convert_to_stgcn_dataset.py     # -> STGCN/data/taichung/
 python convert_to_stgat_dataset.py     # -> STGAT/data/taichung/
+python build_arena.py                  # the decision layer's arena: 9,904 -> 840 nodes, re-simplified
 ```
 
 ### 2. Train and evaluate the prediction models
@@ -197,9 +201,15 @@ python train.py --cuda --data data/taichung/ \
 
 ```bash
 cd STGAT && python run_infer_taichung.py --n-pred 3      # prints its target row R
-cd ../STGCN && python run_infer_taichung.py --n-pred 3 --target-row R     --checkpoint STGCN_taichung_p3.pt                   # same instant, or the ensemble refuses
-cd integration && python make_drl_input.py        # ensemble -> per-edge speeds
+cd ../STGCN && python run_infer_taichung.py --n-pred 3 --target-row R \
+    --checkpoint STGCN_taichung_p3.pt                     # same instant, or make_drl_input refuses
+cd ../integration && python make_drl_input.py --source fusion   # fusion forecast -> per-edge speeds
 ```
+
+`--source fusion` takes the hybrid speeds from the gated-fusion dump that step 5's
+`evaluate.py --dump-all` writes, which is what the reported agent was trained on. Without
+it, `make_drl_input.py` mixes the two single models at a fixed weight — the earlier input.
+The source changes what the agent observes, so switching it means retraining the agent.
 
 ### 4. Routing comparison and the DRL agent
 
@@ -208,16 +218,23 @@ cd integration
 python run_compare.py                                   # METR-LA, seven policies
 python run_compare.py --repeat 10 --drl checkpoints/metr-la/drl_agent.pt   # mean ± std
 python run_compare.py --graph taichung --vehicles 800   # real road network
-python train_drl.py --graph taichung --iters 200 --train-vehicles 800
+python train_drl.py --graph taichung --iters 800 --train-vehicles 800 \
+       --eval-vehicles 800 --fail-mult 10.0 --togo-refresh 25 \
+       --out checkpoints/taichung/drl_fusion_togo25.pt          # the reported agent
+python run_compare.py --graph taichung --vehicles 800 --repeat 10 \
+       --drl checkpoints/taichung/drl_fusion_togo25.pt --beam 8   # S2, the reported table
 ```
+
+`run_compare.py` overwrites `results.json` on every run (S3 writes `results_s3.json`), so
+copy the one you want to keep first.
 
 **S3, the arterial-closure scenario.** Without these flags the run is unchanged.
 
 ```bash
 python run_compare.py --graph taichung --vehicles 800 --close-list   # what is worth closing
 python run_compare.py --graph taichung --vehicles 800 --repeat 10 \
-       --drl checkpoints/taichung/drl_agent_f10_800it.pt \
-       --close-road 臺灣大道 --close-at 0.10       # results go to results_s3.json
+       --drl checkpoints/taichung/drl_fusion_togo25.pt \
+       --close-road 臺灣大道 --close-at 0.10 --beam 8   # results go to results_s3.json
 ```
 
 `--close-road` matches a road-name **prefix**, so `臺灣大道` closes the whole corridor
@@ -229,13 +246,19 @@ sequence that goes out before the incident. See [`integration/closure.py`](integ
 ```bash
 cd fusion
 python verify.py --device cpu                      # required: see below
-python train.py --freeze none --stgcn-tod                 --epochs 60 --batch 32 --patience 12                 --out checkpoints/fusion_c.pt
+python train.py --freeze none --stgcn-tod --epochs 60 --batch 32 --patience 12 \
+                --out checkpoints/fusion_c.pt
 python evaluate.py --checkpoint checkpoints/fusion_c.pt --split test --dump-all
 
 # ablation C₀ — the same command minus one flag
 python train.py --freeze none --epochs 60 --batch 32 --patience 12 \
                 --out checkpoints/fusion_c0.pt
 python evaluate.py --checkpoint checkpoints/fusion_c0.pt --split test   # no --dump-all
+
+# control E — gate bypassed, STGAT alone through fusion's training regime
+python train.py --freeze none --single-path stgat --epochs 60 --batch 32 --patience 12 \
+                --out checkpoints/fusion_e.pt
+python evaluate.py --checkpoint checkpoints/fusion_e.pt --split test    # no --dump-all
 ```
 
 **Never pass `--dump-all` for an ablation.** `evaluate.py` writes
@@ -263,7 +286,9 @@ Needs no checkpoint and no GPU. It verifies its own window alignment by recomput
 persistence and comparing against the number `STGCN/evaluate_masked.py` reports; a
 mismatch aborts rather than printing an incomparable score. Dump both models with
 `run_infer_taichung.py --dump-all --device cpu` to add their columns to the
-anomaly-bucket breakdown.
+anomaly-bucket breakdown. The same dumps feed the fixed-weight sweep under *Ensembling*
+below: `python search_ensemble_weight.py --n-pred 3` on the validation split, then
+`--n-pred 12 --split test` to confirm the weight on data it was not chosen on.
 
 ### 7. Inference latency (proposal §5: "< 50 ms per decision")
 
@@ -278,7 +303,7 @@ python bench_latency.py --graph taichung --vehicles 800 \
 Run **both devices**. On a 1,690-edge graph the encoder is throughput-bound (GPU wins
 8.9x) while the decoder is kernel-launch-bound (CPU wins 2.9x), so the better device
 depends on how many times you decode per vehicle — the crossover is around 68–74 calls.
-Greedy does 23, beam-8 does 261.
+Greedy does 23, beam-8 does 218–261.
 
 `policies.py` is not modified: the timers are installed on the env and agent
 *instances*. `--verify` re-runs the same demand through the untouched `policy_drl` and
@@ -304,15 +329,25 @@ SUMO instance per pane instead (`demo/controller.py`, the second implementation 
 five-method `Backend`; neither the server nor the page changes):
 
 ```bash
-pip install eclipse-sumo traci sumolib
+pip install eclipse-sumo traci sumolib                     # the runs reported here used SUMO 1.18.0
 (cd ../integration && python export_sumo.py --drl checkpoints/taichung/drl_fusion_togo25.pt \
     && cd sumo && sh build_net.sh)                          # network + turn check, once
 python controller.py --selftest --drl ../integration/checkpoints/taichung/drl_fusion_togo25.pt
 DEMO_SUMO_GUI=1 python app.py --backend sumo --drl ../integration/checkpoints/taichung/drl_fusion_togo25.pt
 ```
 
-The replay validation — the reported assignments driven headless in SUMO and scored — is
-`integration/run_sumo_compare.py`; see "Replayed in SUMO" under Results.
+The replay validation — the reported assignments driven headless in SUMO and scored —
+needs only the network built above:
+
+```bash
+cd integration
+python run_sumo_compare.py --drl checkpoints/taichung/drl_fusion_togo25.pt --dry-run
+python run_sumo_compare.py --drl checkpoints/taichung/drl_fusion_togo25.pt   # S2+S3, 154/600 s, 10 seeds
+python run_sumo_compare.py --drl checkpoints/taichung/drl_fusion_togo25.pt \
+       --scenarios s2 --windows 154 --periods 5                              # sustained demand
+```
+
+Tables land in `integration/sumo_a/`; see "Replayed in SUMO" under Results.
 
 Each pane is a batch assignment of 800 vehicles, because eq. 4 couples vehicles through
 the load they leave behind and that coupling is the only place the policies differ.
@@ -320,9 +355,14 @@ Both panes drive the trips *every* policy could route, for the same reason the r
 comparison does: a pane with fewer cars carries less load and would post a better
 worst-rho without its policy having earned it.
 
-**Nothing the page displays is a result.** It moves vehicles under the same BPR
-volume-delay function, but it is not a microscopic traffic simulation — no car-following,
-junctions or signals. Every reported number comes from `run_compare.py`.
+**Nothing the page displays is a result.** Without SUMO it moves vehicles under the same
+BPR volume-delay function — no car-following, junctions or signals. With or without SUMO
+its numbers differ from the reported ones for four reasons: a different demand draw, a
+closure that is in force from the click rather than 10% of the way through the dispatch,
+vehicles that start partway along their routes (about half a trip each), and policy 7
+decoding greedily, because beam-8 is too slow to re-plan live. Compare the two panes as
+ratios, not absolute values; every reported number comes from `run_compare.py` and
+`run_sumo_compare.py`.
 
 ## Results
 
@@ -379,11 +419,13 @@ Three properties of the data that fell out of the HA comparison:
   weekday peak at 60 min (5.56). Peak also carries 21.0% of weekday cells against the
   16.7% a uniform day would give — ETag pairs more often when there is more traffic.
 
-**Open question.** HA scores **3.5054** on weekday peaks at 60 min, below STGAT's
-overall 3.6276. Those are different cell subsets and cannot be compared directly, but it
-has to be checked: if the model does not beat HA during peak hours, its headline margin
-comes from off-peak and weekends — and peak is the only time routing matters. Answering
-it needs one CPU inference pass per model (`--dump-all --device cpu`).
+**Peak hours, checked.** HA scores **3.5054** on weekday peaks at 60 min, below STGAT's
+*overall* 3.6276 — different cell subsets, so the two had to be compared on the same
+cells. On weekday-peak cells STGAT scores **3.2088, −8.5% against HA**: the model does win
+at peak, but by the smallest margin of the three periods (off-peak −12.2%, weekends
+−11.8%), so the overall −10.4% slightly overstates the benefit exactly when routing
+matters. STGCN on its own loses to HA there (3.5904). The margin has to be reported per
+period, not as one number (log 13.20 ④).
 
 Two independent evaluators agree on the persistence baseline to within 0.1%
 (4.2872/4.6744/5.1281 vs 4.2852/4.6712/5.1233), which is the strongest cross-check we
@@ -432,7 +474,10 @@ dataloader that feeds each path its own normalisation; `fusion/verify.py` checks
 the two pretrained backbones reproduce their recorded MAE through it before anything is
 trained.
 
-Result on test: **level with STGAT at 15 min, −0.9% at 30, −1.9% at 60.** The gate is
+Result on test: **level with STGAT at 15 min, −0.9% at 30, −1.9% at 60.** Scored on the
+identical 7,519 test windows — STGAT pushed through the same dataloader gives 3.3833 /
+3.5160 / 3.6308 — the gaps are −0.14%, −1.03% and −2.01%: against the 1% criterion,
+nothing at 15 min, a bare crossing at 30 and about 2% at 60. The gate is
 alive — mean opening 0.83 (which is where the fixed-weight search landed, learned rather
 than told), spread 0.035 across sections and 0.052 across time — but it is not where the
 gain comes from.
@@ -571,7 +616,7 @@ is which of them may be stated without a qualifier:
 | ATT (burst load) | ↓20–30% | **−36.0%** | **−55.8%** | **withdrawn** — +4 to +9% for a single pulse, level with herding under sustained flow. Quote only as "at the saturation the BPR model was calibrated to" |
 | worst-link ρ | ↓20% | **−24.6%** met | **−27.5%** met | reproduced below saturation (−15 to −29%); above it every policy is capped at 1.05 and the metric stops discriminating |
 | Gini(edge load) | ↓30% | −10.1% missed | −12.9% missed | reproduces identically — an identity of the routes, not SUMO evidence |
-| served, sustained flow | — | — | — | **the result that transfers**: herding delivers 81% of trips in two hours, policy 7 **97%** (+16 ± 13 pp paired), the oracle 93% |
+| served, sustained flow | — | — | — | **the result that transfers**: herding delivers 81% of trips in two hours, policy 7 **97%** (+16 ± 13 pp paired), the oracle 93%. Policy 7 against the oracle is +4.6 ± 9.5 pp paired, seed-to-seed variance rather than a win |
 
 #### Feeding the decision layer from fusion changed nothing measurable
 
@@ -590,7 +635,7 @@ headline by less than one standard deviation:
 The two forecasts are genuinely different — correlation 0.985 at 15 min, 3.0% median
 relative difference, against 0.998 and 0.97% for the pair (hybrid, STGAT) the routing
 already treats as interchangeable. And baseline 4 did move: 866.6 → 860.4 s in S2 but
-860.4 → 1432.7 in S3, i.e. *better* under one scenario and *worse* under the other by
+1412.4 → 1432.7 s in S3, i.e. *better* under one scenario and *worse* under the other by
 about 1% each. Policies 1–3 are unchanged to four decimals, confirming that only the
 row which consumes the hybrid forecast was touched.
 
@@ -631,16 +676,19 @@ for route before any wider number is read.
 It fixes **completeness**: dead ends drop 36.8 → 0.5 in S2 and 132.4 → 29.6 in S3. It
 does **not** fix route quality — widening the beam fourfold on the undisturbed network
 moves ATT by 0.8%, and the 10-seed S2 headline gets *worse* (−38.4% → −36.0%) because
-the recovered trips are expensive ones. The 11.5% gap to the oracle is model error, not
-search error.
+the recovered trips are expensive ones. The remaining gap to the oracle is model error,
+not search error. (The 11.5% ATT gap measured on one common set of trips came from an
+earlier agent, seed 42, greedy, before the fusion forecast was wired in; that diagnostic
+was not repeated on the reported agent.)
 
 #### Reading the rest of the table
 
 **Gini falls short of the 30% target, and so does the oracle** (−18.1% in S2, −17.4% in
-S3). On METR-LA the ceiling was −50.7% and the agent reached −35.0%; here the ceiling
-itself is −18.1%, because the starting distribution is already more even (0.71 against
-METR-LA's 0.87) and the hotspot demand funnels into four hubs whose last few hops no
-policy can avoid. That gap is a property of the arena and the demand, not of training.
+S3). On METR-LA the oracle reached −50.7% and the agent −35.0%; here even the oracle
+stops near −18%. The cause is the topology of a real road network — about two exits per
+node, so few parallel routes to spread load over — not the demand and not training; the
+measurement is under "Why the Gini target is not met" below, and it also refutes the
+explanation this paragraph used to give (four hotspot hubs as an unavoidable bottleneck).
 
 **Policies 1–4 are indistinguishable** — identical worst-link ρ down to the standard
 deviation, and the ATT spread between them (1.3–1.7%) is smaller than its own
@@ -656,11 +704,14 @@ and the honest statement becomes "the differences are smaller than the noise" ra
 than "the differences are tiny".
 
 **The agent beats pure coordination on Gini and only on Gini** (S2: −10.1% vs −3.3%;
-S3: −12.9% vs −7.7%) while giving up ATT and worst-link ρ. Policy 5 has congestion
+S3: −12.9% vs −7.7%) while trailing it on ATT and worst-link ρ. Policy 5 has congestion
 feedback but no eq. 4 penalty, so it is good at avoiding the worst link and poor at
-evening out the distribution; the agent trades travel time for spread. That is eq. 4
-working as designed — and under the incident it captures 74% of the oracle's Gini
-improvement, against 56% on the undisturbed network.
+evening out the distribution; the agent has learned to spread load, which is what eq. 4
+is for. **That is not a trade-off between objectives, though.** With the same weights the
+oracle beats policy 5 on ATT, Gini and worst-ρ in 9, 10 and 10 of the 10 seeds, and the
+agent beats the oracle on none of the three in any seed — the objectives can be improved
+together, and the shortfall is the agent's (log 13.16 ②). Under the incident it captures
+74% of the oracle's Gini improvement, against 56% on the undisturbed network.
 
 **Gini is computed over the union of edges any policy used**, so adding a row shifts
 every row's Gini slightly (ATT and worst-link ρ are unaffected). Compare Gini only
@@ -685,7 +736,7 @@ take" is its own failure mode.
 
 ### Why the routing graph is not the whole city
 
-On the full 20,347-edge network only 601 edges (2.2%) carry a prediction, so
+On the full 27,022-edge simplified network only 601 edges (2.2%) carry a prediction, so
 `tpred == t0` almost everywhere and the Dijkstra-on-prediction baselines collapse onto
 the static one. Baseline (4) is the denominator of every delta in this README, so that
 collapse would hollow out the whole comparison.
@@ -884,15 +935,15 @@ objective cannot.
 | **12.0** | −39.5 | **−19.1** | −43.2 |
 
 At fifteen times the reported weight the optimum reaches −19.1%, and each doubling buys
-about 20% less than the last (ratio 0.81), so the series extrapolates to **−22.6%** —
-still seven points short. **The target is unreachable within eq. 4, and that is now
+about 20% less than the last (ratio 0.81), so the series extrapolates to **−22.4%**
+(−21.2% or −25.3% from either measured ratio alone) — still 7.6 points short. **The target is unreachable within eq. 4, and that is now
 measured.** Alpha is not swept and does not need to be: scaling (alpha, lambda1, lambda2)
 together scales the whole cost, which Dijkstra's argmin ignores, so only the ratios
 matter.
 
 The sweep also separates the two penalty terms cleanly. Without lambda2 the spread term
 is gone and Gini improves by only −4.7%; adding it at 0.8 takes it to −14.5%. Raising
-lambda1 from 0.5 to 2.0 moves worst-ρ by 4.4 points and Gini by 0.4. **lambda2 buys Gini,
+lambda1 from 0.5 to 2.0 moves worst-ρ by 4.4 points and Gini by 0.3. **lambda2 buys Gini,
 lambda1 buys worst-link saturation** — which is what eq. 4 has two terms for.
 
 #### The reason is topology, and the target does not transfer between graphs
@@ -941,11 +992,12 @@ Greedy passes on every one of 2,668 vehicles, on both devices, in both scenarios
 just on average. **Three things follow, and two of them are uncomfortable.**
 
 **Beam-8 fails, and beam-8 is the row we quote for quality.** The decoder runs once per
-live beam per hop: 261 calls per vehicle against greedy's 23. The quality numbers and
+live beam per hop: 218–261 calls per vehicle against greedy's 23. The quality numbers and
 the latency number therefore come from two different settings, and the report has to say
 so in the same breath rather than quoting whichever is favourable. There is an
-unimplemented fix — batching the 8 beams into one forward would cut the GPU figure to an
-estimated ~35 ms.
+unimplemented fix — batching the 8 beams into one forward would cut the GPU / S2 mean to
+an estimated ~35 ms. That is an estimate of the mean only; the worst case was not
+estimated.
 
 **The oracle is 43–68x faster and better on all three metrics.** That retires the
 argument, made earlier in this project, that policy 7 trades coordination quality for
@@ -1013,16 +1065,21 @@ policy's routes and measures. Paired deltas against the herding baseline, 10 see
 
 | | S2, 154 s | S2, 600 s | S3, 154 s | S3, 600 s | BPR (the table above) |
 |---|---:|---:|---:|---:|---:|
-| **7 DRL, ATT** | **+3.6 ± 0.9%** | +6.8% | +4.2% | +7.0% | **−36.0% / −55.8%** |
+| **7 DRL, ATT** | **+3.6 ± 0.9%** | +6.8% | +6.5%\* | +9.1%\* | **−36.0% / −55.8%** |
 | 7 DRL, worst ρ | −15.1% | −22.3% | −28.5% | −24.5% | −24.6% / −27.5% |
 | 7 DRL, Gini | −12.1% | −12.1% | −14.9% | −14.9% | −10.1% / −12.9% |
 | 6 oracle, ATT | +5.1% | +8.9% | +5.6% | +7.8% | −44.0% / −61.2% |
-| **1 static, ATT** | **−3.6%** | −2.3% | −0.7% | −0.8% | worse than herding |
+| **1 static, ATT** | **−3.6%** | −2.3% | −0.7% | −0.8% | −1.4% / −1.7% |
+
+\* Policy 7 delivers 96.0% in S3, so its ATT is taken on the trips all four policies
+completed; over every trip it delivered the figures are +4.2% and +7.0%.
 
 Two of the three effects carry over and one flips. The **spread** does: worst-ρ falls by
-the same order as in the BPR arena. (Gini "carries over" identically in every setting,
-which is an identity rather than a result: total entries per edge are the route counts,
-so any replay reproduces the assignment's Gini.) The **travel-time** saving does not — the
+the same order as in the BPR arena. (Gini comes out the same at both departure windows,
+which is an identity rather than a result: an edge's total entries are fixed by the
+routes that cross it. It differs from the BPR column only because the reference set
+holds the four replayed policies and SUMO's entry count leaves out each vehicle's
+departure edge.) The **travel-time** saving does not — the
 coordinated policies are 4–9% *slower* than the herding baseline, and free-flow shortest
 paths are the fastest of all. The reason is measured: the busiest edge's ρ is 3.33 in the
 BPR world and 0.84 per 154-s window in SUMO, insertion delay is 0.7 s — at this demand
@@ -1048,20 +1105,30 @@ negative, and is withdrawn otherwise. Ten seeds, 4,000 vehicles per run:
 with the herding baseline (+0.7 ± 7.3%); it was slower in the single pulse and is not
 faster under sustained flow. What sustained flow *does* show is where the herding cost
 went: 19% of the baseline's trips never arrive within two hours and its departure queue
-is 11 s, while policy 7 delivers 97.3% and the oracle 92.7%. The BPR model prices excess
-demand as very long travel times and every vehicle "arrives"; SUMO prices it as queues
-and gridlock. Travel time cannot be compared across those two worlds — served fraction
-can, and that is the transferable result. Two further caveats: worst-ρ stops
-discriminating once saturated (every policy sits at 1.05, because entries per window are
-capped by the road's physical throughput — the assignment's ρ of 3.33 can never appear
-as flow), and the seed-to-seed spread is wide (±12 pp; in one seed policy 7 gridlocked
-too). Details, per-seed numbers and the pre-registered rule: log 13.30–13.31.
+is 11 s, while policy 7 delivers 97.3% and the oracle 92.7%. That last gap is not policy
+7 beating the oracle: paired by seed it is +4.6 ± 9.5 pp, and it comes from how many
+seeds gridlock at all — the baseline in 8 of 10, the oracle in 6, policy 7 in 1 — each
+time trapping 90 to 1,201 vehicles at once. Why the oracle gridlocks more often is not
+established; routing more trips over single-lane roads was checked and ruled out
+(log 13.31 ⑧). The oracle optimises the BPR arena's cost, not served% in SUMO.
+
+The BPR model prices excess demand as very long travel times and every vehicle
+"arrives"; SUMO prices it as queues and gridlock. Travel time cannot be compared across
+those two worlds — served fraction can, and that is the transferable result. Two further
+caveats: worst-ρ stops discriminating once saturated (every policy sits at 1.05, because
+entries per window are capped by the road's physical throughput — the assignment's ρ of
+3.33 can never appear as flow), and the seed-to-seed spread is wide (±12 pp; in one seed
+policy 7 gridlocked too). Details, per-seed numbers and the pre-registered rule: log 13.30–13.31.
 
 ## Status & roadmap
 
 **Prediction (Track A)**
 
-- [x] STGCN / STGAT reproduced on METR-LA (STGAT test MAE ≈ 3.16, beats the proposal target)
+- [x] STGAT reproduced on METR-LA: the best-validation checkpoint scores 2.75 / 3.13 / 3.54
+      MAE at 15 / 30 / 60 min (12-step mean 3.08), 2–4% above the paper's 2.66 / 3.01 / 3.46
+      — the proposal quoted 3.69, which is not in the paper. A single run, because the
+      upstream STGAT trainer sets no seed. STGCN ran on METR-LA only to feed the routing
+      comparison; no accuracy figure is reported for it
 - [x] Taichung TDX pipeline + masked evaluation (persistence baseline, PASS/FAIL verdict)
 - [x] Road network rebuilt: all 244 TDX sections now map, 202 survive (was 175)
 - [x] Both models trained on Taichung, on the 175- and 202-section datasets
@@ -1104,19 +1171,22 @@ too). Details, per-seed numbers and the pre-registered rule: log 13.30–13.31.
       pushes worst-link ρ past the proposal's target
 - [x] **Arterial-closure scenario S3**, 10 seeds — the proposal's motivating case
 - [x] **Beam-search decoding**, with a width-1 equivalence test against greedy
-- [x] **Policy 7 fully comparable in both scenarios** (served 100% / 96.4%)
+- [x] **Policy 7 fully comparable in both scenarios** (beam-8 served 99.9% / 96.0%)
 - [x] **Inference latency measured** (proposal §5) — greedy clears 50 ms on 100% of
       2,668 vehicles, on both devices. Beam-8 does not, and the Dijkstra baselines are
       43–68x faster than either
-- [ ] Batch the 8 beams into one decoder forward — would put beam-8 back under 50 ms
-      (estimated ~35 ms) and remove the quality/latency conflict
+- [ ] Batch the 8 beams into one decoder forward — estimated to bring beam-8's mean to
+      ~35 ms (GPU / S2; worst case not estimated), which would ease the quality/latency
+      conflict
 - [ ] Vectorise `_compute_enc_ctx`: a per-node Python loop, now a third of the GPU
       per-vehicle model cost
 - [x] ~~Widen the hotspot funnel (`N_HOTSPOTS`)~~ — **ruled out, not untried.** The
       random scenario is that lever taken to its extreme, and it measures Gini −16.0%
       against hotspot's −19.1%: a wider funnel makes the distribution worse, not better
 - [ ] `tpred_fallback` sensitivity: `free_flow` vs `network_mean`, both reported
-- [ ] One-horizon vs three-horizon agent ablation (now feasible: fusion emits all three)
+- [ ] One-horizon vs three-horizon agent ablation (now feasible: fusion emits all three) —
+      deferred: prediction has no measurable effect on routing here, so the expected
+      result is null
 
 **Cross-track**
 
@@ -1154,8 +1224,11 @@ too). Details, per-seed numbers and the pre-registered rule: log 13.30–13.31.
       `export_sumo.py` now writes the recovered road shapes (3 of the 6 gaps close on
       their own) and `build_net.sh` checks every turn against the graph, rebuilding with
       a fix file that restates every turn of the few incoming edges that still have one
-- [ ] Fifth self-test on the shaped, checked network — `setRoute-failed 0`, roads drawn
-      along their real course in `sumo-gui`
+- [x] Fifth self-test on the shaped, checked network (13 Sep) — PASS. 734 vehicles per
+      pane; after 臺灣大道 closes the herding pane re-routes 337 cars and strands 22,
+      policy 7 re-routes 374 and strands 15, with `setRoute-failed 0` and `teleported 0`.
+      Before the closure policy 7's worst-link ρ is 17.5% below the baseline's, the same
+      direction as the reported S2 result
 - [x] **Replay validation in SUMO (mode A)** — the report's S2 and S3 assignments,
       beam-8, 10 seeds, replayed headless and scored from `tripinfo` and `edgeData`
       (`integration/run_sumo_compare.py`, `sumo_metrics.py`). **The spread transfers
@@ -1166,7 +1239,8 @@ too). Details, per-seed numbers and the pre-registered rule: log 13.30–13.31.
       pre-registered. **The ATT claim is withdrawn** (policy 7 level with herding on the
       common trips, +0.7 ± 7.3%). The herding cost appears as gridlock instead: the
       baseline delivers 81% of trips in two hours, policy 7 delivers 97% (+16 ± 13 pp
-      paired), the oracle 93% and is the only policy faster on time (−10%)
+      paired), the oracle 93% and is the only policy faster on time (−10%). Policy 7's
+      lead over the oracle on served (+4.6 ± 9.5 pp paired) is seed-to-seed variance
 - [ ] Mode B: SUMO's state as the agent's observation rather than the BPR model. Needs a
       retrain, and it is the only experiment that could show policy 7 earning its place
       against the analytic oracle
@@ -1189,7 +1263,7 @@ Detailed design and history: [`paper_work/實驗設計.md`](paper_work/實驗設
 ## Credits & references
 
 This project builds on three open-source implementations; the corresponding papers are
-included in this folder as PDFs.
+listed below (local PDF copies are kept beside this README but are not in the repository).
 
 | Module | Code (cloned from) | Paper |
 |---|---|---|
@@ -1197,8 +1271,11 @@ included in this folder as PDFs.
 | STGAT prediction | [xyk0058/STGAT](https://github.com/xyk0058/STGAT) | Kong et al. — *STGAT: Spatial-Temporal Graph Attention Networks for Traffic Flow Forecasting*, IEEE Access 2020 |
 | DRL routing | [Lei-Kun/DRL-and-graph-neural-network-for-routing-problems](https://github.com/Lei-Kun/DRL-and-graph-neural-network-for-routing-problems) — **re-implemented, not vendored** | Lei et al. — *Solve routing problems with a residual edge-graph attention neural network*, Neurocomputing 2022 |
 
-Additional methods referenced: Schulman et al. 2017 (PPO) · Wardrop 1952
-(User-Equilibrium vs System-Optimum) · Lopez et al. 2018 (SUMO).
+Additional methods referenced: Schulman et al. 2017 (PPO) · Schulman et al. 2016
+(generalized advantage estimation) · Brody, Alon & Yahav 2022 (GATv2, the encoder's
+layer) · Ng, Harada & Russell 1999 (potential-based reward shaping) · Bureau of Public
+Roads 1964 (the BPR volume-delay function) · Wardrop 1952 (User-Equilibrium vs
+System-Optimum) · Li et al. 2018 (DCRNN, the source of METR-LA) · Lopez et al. 2018 (SUMO).
 
 ## Licensing
 
